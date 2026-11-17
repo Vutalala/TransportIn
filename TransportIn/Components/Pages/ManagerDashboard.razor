@@ -55,7 +55,10 @@
                 <div>
                     <div class="modern-card">
                         <div class="card-header-custom">
-                            <h5><span class="header-icon blue"><i class="bi bi-box-seam"></i></span> Нове замовлення</h5>
+                            <h5>
+                                <span class="header-icon blue"><i class="bi bi-box-seam"></i></span>
+                                @(editingId == null ? "Нове замовлення" : $"Редагування замовлення №{editingId}")
+                            </h5>
                         </div>
                         <div class="card-body-custom">
                             <div class="nav-tabs-modern">
@@ -86,6 +89,7 @@
                                     <div class="form-section-title mb-0"><i class="bi bi-box"></i> Список вантажів</div>
                                     <button class="btn-modern btn-add" style="height:auto;padding:.4rem .8rem;font-size:.78rem" @onclick="AddCargo"><i class="bi bi-plus-lg"></i> Додати вантаж</button>
                                 </div>
+                                @MgrMsg("cargos")
 
                                 @if (newOrder.Cargos.Count == 0)
                                 {
@@ -127,6 +131,7 @@
                                         <button class="btn-modern" style="height:auto;padding:.4rem .8rem;font-size:.78rem;background:rgba(16,185,129,.15);color:#34d399;border:1px solid rgba(16,185,129,.3)" @onclick="() => AddPoint(false)"><i class="bi bi-plus-lg"></i> Доставка</button>
                                     </div>
                                 </div>
+                                @MgrMsg("points")
 
                                 @if (newOrder.Points.Count == 0)
                                 {
@@ -145,19 +150,24 @@
                                             <span class="point-type-badge @(newOrder.Points[idx].IsLoading ? "loading" : "delivery")">
                                                 @(newOrder.Points[idx].IsLoading ? "ЗАВАНТАЖЕННЯ" : "ДОСТАВКА")
                                             </span>
-                                            <span style="color:var(--text-secondary);font-size:.78rem">Порядок: #@idx</span>
+                                            <span style="color:var(--text-secondary);font-size:.78rem">Порядок: #@(idx + 1)</span>
                                         </div>
                                         <div><label class="form-label-modern">Адреса *</label><input class="dark-input w-100 @MgrErr($"point_{idx}_address")" @bind="newOrder.Points[idx].Address" placeholder="вул. Хрещатик, 1" />@MgrMsg($"point_{idx}_address")</div>
                                         <div><label class="form-label-modern">Контактна особа *</label><input class="dark-input w-100 @MgrErr($"point_{idx}_contact")" @bind="newOrder.Points[idx].ContactName" placeholder="Петренко О. В." />@MgrMsg($"point_{idx}_contact")</div>
                                         <div><label class="form-label-modern">Телефон *</label><input class="dark-input w-100 @MgrErr($"point_{idx}_phone")" @bind="newOrder.Points[idx].ContactPhone" placeholder="0501234567" />@MgrMsg($"point_{idx}_phone")</div>
-                                        <div><label class="form-label-modern">Тип операції</label><select class="dark-input w-100" @bind="newOrder.Points[idx].OperationType"><option value="Передача">Передача вантажу</option><option value="Отримання">Отримання вантажу</option></select></div>
                                     </div>
                                 }
                             }
 
-                            <button class="btn-modern btn-add w-100 mt-3" style="height:48px;font-size:1rem" @onclick="CreateOrder">
-                                <i class="bi bi-check-circle-fill"></i> Створити замовлення
-                            </button>
+                            <div class="d-flex gap-2 mt-3">
+                                <button class="btn-modern btn-add flex-grow-1" style="height:48px;font-size:1rem" @onclick="SaveOrder">
+                                    <i class="bi bi-check-circle-fill"></i> @(editingId == null ? "Створити замовлення" : $"Зберегти замовлення №{editingId}")
+                                </button>
+                                @if (editingId != null)
+                                {
+                                    <button class="btn-modern btn-danger-modern" style="height:48px" @onclick="CancelEdit"><i class="bi bi-x-lg"></i> Скасувати редагування</button>
+                                }
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -209,14 +219,14 @@
                                             }
                                         </div>
 
-                                        @if (!string.IsNullOrEmpty(o.AssignedVehiclePlate) && string.IsNullOrEmpty(o.AssignedDriver))
+                                        @if (!string.IsNullOrEmpty(o.AssignedVehiclePlate) && string.IsNullOrEmpty(o.AssignedDriver) && o.Status != "Скасовано" && o.Status != "Завершено")
                                         {
                                             <div class="row g-2 mb-2 align-items-end">
                                                 <div class="col-md-8">
                                                     <label class="form-label-modern">Призначити водія</label>
-                                                    <select class="dark-input w-100" @bind="o.AssignedDriver">
+                                                    <select class="dark-input w-100" value="@GetPendingDriver(o.Id)" @onchange="e => SetPendingDriver(o.Id, e)">
                                                         <option value="">— обрати —</option>
-                                                        @foreach (var d in availableDrivers)
+                                                        @foreach (var d in AvailableDriversFor(o))
                                                         {
                                                             <option value="@d">@d</option>
                                                         }
@@ -226,17 +236,21 @@
                                                     <button class="btn-action assign w-100" @onclick="() => AssignDriver(o)"><i class="bi bi-person-check"></i> Призначити</button>
                                                 </div>
                                             </div>
-                                            @if (!string.IsNullOrEmpty(assignmentWarning) && selectedOrder?.Id == o.Id)
+                                            @if (driverWarnings.TryGetValue(o.Id, out var dw))
                                             {
                                                 <div class="mt-2 p-2" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#fbbf24;font-size:.82rem">
-                                                    <i class="bi bi-exclamation-triangle-fill me-1"></i> @assignmentWarning
+                                                    <i class="bi bi-exclamation-triangle-fill me-1"></i> @dw
                                                 </div>
                                             }
                                         }
                                         else if (!string.IsNullOrEmpty(o.AssignedDriver))
                                         {
-                                            <div style="background:rgba(16,185,129,.1);padding:.5rem .75rem;border-radius:6px;font-size:.82rem;color:#34d399;margin-bottom:.75rem">
-                                                <i class="bi bi-person-badge me-1"></i> Водій: <strong>@o.AssignedDriver</strong>
+                                            <div class="d-flex justify-content-between align-items-center" style="background:rgba(16,185,129,.1);padding:.5rem .75rem;border-radius:6px;font-size:.82rem;color:#34d399;margin-bottom:.75rem">
+                                                <span><i class="bi bi-person-badge me-1"></i> Водій: <strong>@o.AssignedDriver</strong></span>
+                                                @if (o.Status != "Скасовано" && o.Status != "Завершено")
+                                                {
+                                                    <button class="btn-action" style="padding:.15rem .5rem" @onclick="() => UnassignDriver(o)"><i class="bi bi-x"></i> Змінити</button>
+                                                }
                                             </div>
                                         }
 
@@ -248,6 +262,10 @@
                                             @if (o.Status == "Нове" || o.Status == "В роботі")
                                             {
                                                 <button class="btn-action" @onclick="() => SelectForMatching(o)"><i class="bi bi-search"></i> Підібрати ТЗ</button>
+                                            }
+                                            @if (o.Status == "В роботі" && !string.IsNullOrEmpty(o.AssignedVehiclePlate) && !string.IsNullOrEmpty(o.AssignedDriver))
+                                            {
+                                                <button class="btn-action assign" @onclick="() => CompleteOrder(o)"><i class="bi bi-check2-all"></i> Завершити</button>
                                             }
                                             @if (o.Status != "Скасовано" && o.Status != "Завершено")
                                             {
@@ -269,6 +287,12 @@
                                 <button class="btn-modern btn-danger-modern py-1 px-2" @onclick="() => selectedOrder = null"><i class="bi bi-x-lg"></i></button>
                             </div>
                             <div class="card-body-custom">
+                                @if (!string.IsNullOrEmpty(matchWarning))
+                                {
+                                    <div class="mb-3 p-2" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#fbbf24;font-size:.82rem">
+                                        <i class="bi bi-exclamation-triangle-fill me-1"></i> @matchWarning
+                                    </div>
+                                }
                                 @{
                                     var suitable = GetSuitableVehicles(selectedOrder);
                                 }
@@ -295,7 +319,7 @@
                                                         <td>@(v.HasRefrigerator ? "✅" : "—")</td>
                                                         <td>@(string.IsNullOrEmpty(v.AssignedDriver) ? "—" : v.AssignedDriver)</td>
                                                         <td>
-                                                            <button class="btn-modern btn-add py-1 px-3" style="height:auto" @onclick="() => AssignVehicle(selectedOrder.Id, v.LicensePlate)"><i class="bi bi-check-lg"></i></button>
+                                                            <button class="btn-modern btn-add py-1 px-3" style="height:auto" @onclick="() => AssignVehicle(selectedOrder!.Id, v.LicensePlate)" @onclick:stopPropagation="true"><i class="bi bi-check-lg"></i></button>
                                                         </td>
                                                     </tr>
                                                 }
@@ -370,13 +394,35 @@
                                                     </span>
                                                 </div>
                                             </div>
-                                            <button class="btn-modern btn-danger-modern" @onclick="() => openedMessage = null"><i class="bi bi-x-lg"></i></button>
+                                            <button class="btn-modern btn-danger-modern" @onclick="CloseMessage"><i class="bi bi-x-lg"></i></button>
                                         </div>
                                         <div class="msg-detail-body">@openedMessage.Body</div>
-                                        <div class="d-flex gap-2 mt-3">
-                                            <button class="btn-action assign" @onclick="() => ReplyMessage(openedMessage)"><i class="bi bi-reply"></i> Відповісти</button>
-                                            <button class="btn-action" @onclick="() => MarkRead(openedMessage)"><i class="bi bi-check-circle"></i> Позначити прочитаним</button>
-                                        </div>
+
+                                        @foreach (var r in openedMessage.Replies)
+                                        {
+                                            <div class="mt-2 p-2" style="background:rgba(59,130,246,.1);border-radius:6px;font-size:.85rem">
+                                                <strong>Ви</strong> · @r.Time<br />@r.Text
+                                            </div>
+                                        }
+
+                                        @if (replyingTo?.Id == openedMessage.Id)
+                                        {
+                                            <textarea class="dark-input w-100 mt-3" rows="3" placeholder="Ваша відповідь..." @bind="replyText" @bind:event="oninput"></textarea>
+                                            <div class="d-flex gap-2 mt-2">
+                                                <button class="btn-action assign" @onclick="SendReply" disabled="@string.IsNullOrWhiteSpace(replyText)"><i class="bi bi-send"></i> Надіслати</button>
+                                                <button class="btn-action" @onclick="() => replyingTo = null">Скасувати</button>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <div class="d-flex gap-2 mt-3">
+                                                <button class="btn-action assign" @onclick="() => ReplyMessage(openedMessage)"><i class="bi bi-reply"></i> Відповісти</button>
+                                                @if (!openedMessage.IsRead)
+                                                {
+                                                    <button class="btn-action" @onclick="() => MarkRead(openedMessage)"><i class="bi bi-check-circle"></i> Позначити прочитаним</button>
+                                                }
+                                            </div>
+                                        }
                                     </div>
                                 }
                             }
@@ -390,15 +436,21 @@
 
 @code {
     private string mgrTab = "customer";
-    private string assignmentWarning = "";
+    private string matchWarning = "";
+    private string confirmPlate = "";
+    private int? editingId;
     private Dictionary<string, string> mgrErrors = new();
+    private Dictionary<int, string> pendingDrivers = new();
+    private Dictionary<int, string> driverWarnings = new();
     private List<OrderVM> orders = new();
     private List<MessageVM> messages = new();
     private OrderVM? selectedOrder;
     private string selectedVehicle = "";
     private MessageVM? openedMessage;
+    private MessageVM? replyingTo;
+    private string replyText = "";
 
-    private List<string> availableDrivers = new() { "Коваленко І. П.", "Бондар В. М.", "Шевченко О. О." };
+    private List<string> allDrivers = new() { "Коваленко І. П.", "Бондар В. М.", "Шевченко О. О." };
 
     private class OrderForm
     {
@@ -417,13 +469,15 @@
     private class OrderVM
     {
         public int Id; public string CustomerCompany = ""; public string CustomerName = ""; public string CustomerPhone = ""; public string CustomerEmail = "";
-        public string Status = "Нове"; public string AssignedVehiclePlate = ""; public string AssignedDriver = "";
+        public string Status = "Нове"; public string PrevStatus = "Нове"; public string AssignedVehiclePlate = ""; public string AssignedDriver = "";
         public List<CargoForm> Cargos = new(); public List<PointForm> Points = new();
     }
+    private class ReplyVM { public string Text = ""; public string Time = ""; }
     private class MessageVM
     {
         public int Id; public string SenderName = ""; public string Subject = ""; public string Body = "";
         public string Category = "manager"; public string Time = ""; public bool IsRead;
+        public List<ReplyVM> Replies = new();
     }
 
     private OrderForm newOrder = new();
@@ -451,12 +505,35 @@
 
     private void OnChanged() => InvokeAsync(StateHasChanged);
 
+    // ===== Форма: вантажі / точки =====
     private void AddCargo() => newOrder.Cargos.Add(new CargoForm());
-    private void RemoveCargo(int idx) => newOrder.Cargos.RemoveAt(idx);
-    private void AddPoint(bool isLoading) => newOrder.Points.Add(new PointForm { IsLoading = isLoading });
-    private void RemovePoint(int idx) => newOrder.Points.RemoveAt(idx);
+    private void RemoveCargo(int idx) { if (idx >= 0 && idx < newOrder.Cargos.Count) newOrder.Cargos.RemoveAt(idx); }
+    private void AddPoint(bool isLoading) =>
+        newOrder.Points.Add(new PointForm { IsLoading = isLoading, OperationType = isLoading ? "Передача" : "Отримання" });
+    private void RemovePoint(int idx) { if (idx >= 0 && idx < newOrder.Points.Count) newOrder.Points.RemoveAt(idx); }
 
-    private void CreateOrder()
+    private static CargoForm CloneCargo(CargoForm c) => new()
+        {
+            Name = c.Name,
+            Quantity = c.Quantity,
+            WeightTons = c.WeightTons,
+            VolumeM3 = c.VolumeM3,
+            NeedsRefrigerator = c.NeedsRefrigerator,
+            TempMin = c.NeedsRefrigerator ? c.TempMin : 0,
+            TempMax = c.NeedsRefrigerator ? c.TempMax : 0,
+            SpecialConditions = c.SpecialConditions
+        };
+    private static PointForm ClonePoint(PointForm p) => new()
+        {
+            IsLoading = p.IsLoading,
+            Address = p.Address,
+            ContactName = p.ContactName,
+            ContactPhone = p.ContactPhone,
+            OperationType = p.IsLoading ? "Передача" : "Отримання"
+        };
+
+    // ===== Створення / редагування =====
+    private bool Validate()
     {
         mgrErrors.Clear();
         if (string.IsNullOrWhiteSpace(newOrder.CustomerCompany)) mgrErrors["Company"] = "Обов'язкове поле";
@@ -464,6 +541,7 @@
         if (!RxPhone.IsMatch(newOrder.CustomerPhone ?? "")) mgrErrors["ContactPhone"] = "Телефон: 10 цифр, починається з 0";
         if (!RxEmail.IsMatch(newOrder.CustomerEmail ?? "")) mgrErrors["ContactEmail"] = "Невірний формат email";
 
+        if (newOrder.Cargos.Count == 0) mgrErrors["cargos"] = "Додайте хоча б один вантаж";
         for (int i = 0; i < newOrder.Cargos.Count; i++)
         {
             if (string.IsNullOrWhiteSpace(newOrder.Cargos[i].Name)) mgrErrors[$"cargo_{i}_name"] = "Назва обов'язкова";
@@ -471,56 +549,153 @@
             if (newOrder.Cargos[i].VolumeM3 <= 0) mgrErrors[$"cargo_{i}_volume"] = "Об'єм > 0";
         }
 
+        if (!newOrder.Points.Any(p => p.IsLoading) || !newOrder.Points.Any(p => !p.IsLoading))
+            mgrErrors["points"] = "Потрібен мінімум один пункт завантаження і один доставки";
         for (int i = 0; i < newOrder.Points.Count; i++)
         {
             if (string.IsNullOrWhiteSpace(newOrder.Points[i].Address)) mgrErrors[$"point_{i}_address"] = "Адреса обов'язкова";
             if (string.IsNullOrWhiteSpace(newOrder.Points[i].ContactName)) mgrErrors[$"point_{i}_contact"] = "Контактна особа обов'язкова";
             if (!RxPhone.IsMatch(newOrder.Points[i].ContactPhone ?? "")) mgrErrors[$"point_{i}_phone"] = "Телефон: 10 цифр";
         }
+        return mgrErrors.Count == 0;
+    }
 
-        if (mgrErrors.Count > 0) { mgrTab = FirstMgrTab(); StateHasChanged(); return; }
+    private void SaveOrder()
+    {
+        if (!Validate()) { mgrTab = FirstMgrTab(); return; }
 
-        var order = new OrderVM
+        var cargos = newOrder.Cargos.Select(CloneCargo).ToList();
+        var points = newOrder.Points.Select(ClonePoint).ToList();
+
+        if (editingId != null)
         {
-            Id = orders.Count + 1,
-            CustomerCompany = newOrder.CustomerCompany,
-            CustomerName = newOrder.CustomerName,
-            CustomerPhone = newOrder.CustomerPhone,
-            CustomerEmail = newOrder.CustomerEmail,
-            Cargos = newOrder.Cargos.Select(c => new CargoForm { Name = c.Name, WeightTons = c.WeightTons, VolumeM3 = c.VolumeM3, NeedsRefrigerator = c.NeedsRefrigerator }).ToList(),
-            Points = newOrder.Points.Select(p => new PointForm { IsLoading = p.IsLoading, Address = p.Address, ContactName = p.ContactName, ContactPhone = p.ContactPhone }).ToList()
-        };
-        orders.Add(order);
-        newOrder = new OrderForm { Cargos = new() { new CargoForm() }, Points = new() };
+            var o = orders.FirstOrDefault(x => x.Id == editingId);
+            if (o != null)
+            {
+                o.CustomerCompany = newOrder.CustomerCompany;
+                o.CustomerName = newOrder.CustomerName;
+                o.CustomerPhone = newOrder.CustomerPhone;
+                o.CustomerEmail = newOrder.CustomerEmail;
+                o.Cargos = cargos;
+                o.Points = points;
+            }
+        }
+        else
+        {
+            orders.Add(new OrderVM
+                {
+                    Id = orders.Count == 0 ? 1 : orders.Max(x => x.Id) + 1,
+                    CustomerCompany = newOrder.CustomerCompany,
+                    CustomerName = newOrder.CustomerName,
+                    CustomerPhone = newOrder.CustomerPhone,
+                    CustomerEmail = newOrder.CustomerEmail,
+                    Cargos = cargos,
+                    Points = points
+                });
+        }
+        ResetForm();
+    }
+
+    private void ResetForm()
+    {
+        newOrder = new OrderForm();
+        mgrErrors.Clear();
+        editingId = null;
+        mgrTab = "customer";
+    }
+
+    private void CancelEdit() => ResetForm();
+
+    private void EditOrder(OrderVM o)
+    {
+        editingId = o.Id;
+        mgrErrors.Clear();
+        newOrder = new OrderForm
+            {
+                CustomerCompany = o.CustomerCompany,
+                CustomerName = o.CustomerName,
+                CustomerPhone = o.CustomerPhone,
+                CustomerEmail = o.CustomerEmail,
+                Cargos = o.Cargos.Select(CloneCargo).ToList(),
+                Points = o.Points.Select(ClonePoint).ToList()
+            };
         mgrTab = "customer";
     }
 
     private string FirstMgrTab()
     {
-        if (mgrErrors.Any(e => e.Key is "Company" or "ContactName" or "ContactPhone" or "ContactEmail")) return "customer";
-        if (mgrErrors.Any(e => e.Key.StartsWith("cargo_"))) return "cargo";
-        if (mgrErrors.Any(e => e.Key.StartsWith("point_"))) return "points";
+        if (mgrErrors.Keys.Any(k => k is "Company" or "ContactName" or "ContactPhone" or "ContactEmail")) return "customer";
+        if (mgrErrors.Keys.Any(k => k == "cargos" || k.StartsWith("cargo_"))) return "cargo";
+        if (mgrErrors.Keys.Any(k => k == "points" || k.StartsWith("point_"))) return "points";
         return "customer";
     }
 
-    private void SelectForMatching(OrderVM o) { selectedOrder = o; assignmentWarning = ""; }
+    // ===== Підбір ТЗ / призначення =====
+    private void SelectForMatching(OrderVM o)
+    {
+        selectedOrder = o; selectedVehicle = ""; matchWarning = ""; confirmPlate = "";
+    }
 
     private void AssignVehicle(int orderId, string plate)
     {
-        var isBusy = orders.Any(o => o.Id != orderId && o.AssignedVehiclePlate == plate && (o.Status == "В роботі" || o.Status == "Призупинено"));
-        if (isBusy) assignmentWarning = $"Увага! Транспорт {plate} вже призначений на інше активне замовлення.";
-        else assignmentWarning = "";
+        var busy = orders.Any(x => x.Id != orderId && x.AssignedVehiclePlate == plate
+                                   && (x.Status == "В роботі" || x.Status == "Призупинено"));
+        if (busy && confirmPlate != plate)
+        {
+            matchWarning = $"Увага! Транспорт {plate} вже призначений на інше активне замовлення. Натисніть ✓ ще раз, щоб призначити все одно.";
+            confirmPlate = plate;
+            return;
+        }
 
-        var o = orders.First(x => x.Id == orderId);
+        var o = orders.FirstOrDefault(x => x.Id == orderId);
+        if (o == null) return;
+        if (o.AssignedVehiclePlate != plate) { o.AssignedDriver = ""; pendingDrivers.Remove(o.Id); }
         o.AssignedVehiclePlate = plate;
         o.Status = "В роботі";
-        selectedOrder = null; selectedVehicle = "";
+        selectedOrder = null; selectedVehicle = ""; matchWarning = ""; confirmPlate = "";
     }
 
-    private void AssignDriver(OrderVM o) { if (string.IsNullOrEmpty(o.AssignedDriver)) return; }
-    private void EditOrder(OrderVM o) { mgrTab = "customer"; }
-    private void SuspendOrder(OrderVM o) { o.Status = o.Status == "Призупинено" ? "В роботі" : "Призупинено"; }
-    private void CancelOrder(OrderVM o) { o.Status = "Скасовано"; }
+    private string GetPendingDriver(int orderId) => pendingDrivers.TryGetValue(orderId, out var d) ? d : "";
+    private void SetPendingDriver(int orderId, ChangeEventArgs e)
+    {
+        pendingDrivers[orderId] = e.Value?.ToString() ?? "";
+        driverWarnings.Remove(orderId);
+    }
+
+    private IEnumerable<string> AvailableDriversFor(OrderVM o)
+    {
+        var busy = orders.Where(x => x.Id != o.Id && (x.Status == "В роботі" || x.Status == "Призупинено"))
+                         .Select(x => x.AssignedDriver).Where(d => !string.IsNullOrEmpty(d)).ToHashSet();
+        return allDrivers.Where(d => !busy.Contains(d));
+    }
+
+    private void AssignDriver(OrderVM o)
+    {
+        var d = GetPendingDriver(o.Id);
+        if (string.IsNullOrEmpty(d)) { driverWarnings[o.Id] = "Оберіть водія зі списку."; return; }
+        o.AssignedDriver = d;
+        pendingDrivers.Remove(o.Id);
+        driverWarnings.Remove(o.Id);
+    }
+
+    private void UnassignDriver(OrderVM o) { o.AssignedDriver = ""; }
+
+    // ===== Статуси =====
+    private void SuspendOrder(OrderVM o)
+    {
+        if (o.Status == "Призупинено") o.Status = o.PrevStatus;
+        else { o.PrevStatus = o.Status; o.Status = "Призупинено"; }
+        if (selectedOrder?.Id == o.Id) selectedOrder = null;
+    }
+
+    private void CancelOrder(OrderVM o)
+    {
+        o.Status = "Скасовано";
+        if (selectedOrder?.Id == o.Id) selectedOrder = null;
+        if (editingId == o.Id) ResetForm();
+    }
+
+    private void CompleteOrder(OrderVM o) { o.Status = "Завершено"; }
 
     private List<TransportIn.Models.Vehicle> GetSuitableVehicles(OrderVM o)
     {
@@ -531,12 +706,29 @@
         return all.Where(v => v.CapacityTons >= totalWeight && v.VolumeM3 >= totalVolume && (!needsRef || v.HasRefrigerator)).ToList();
     }
 
-    private void OpenMessage(MessageVM m) { openedMessage = m; m.IsRead = true; }
+    // ===== Повідомлення =====
+    private void OpenMessage(MessageVM m) { openedMessage = m; m.IsRead = true; replyingTo = null; replyText = ""; }
+    private void CloseMessage() { openedMessage = null; replyingTo = null; replyText = ""; }
     private void MarkRead(MessageVM m) => m.IsRead = true;
-    private void ReplyMessage(MessageVM m) { }
+    private void ReplyMessage(MessageVM m) { replyingTo = m; replyText = ""; }
+    private void SendReply()
+    {
+        if (replyingTo == null || string.IsNullOrWhiteSpace(replyText)) return;
+        replyingTo.Replies.Add(new ReplyVM { Text = replyText.Trim(), Time = DateTime.Now.ToString("HH:mm") });
+        replyingTo = null; replyText = "";
+    }
 
     private string MgrErr(string k) => mgrErrors.ContainsKey(k) ? "is-invalid" : "";
-    private RenderFragment MgrMsg(string k) => builder => { if (mgrErrors.TryGetValue(k, out var m)) { builder.OpenElement(0, "div"); builder.AddAttribute(1, "class", "invalid-feedback-modern"); builder.AddContent(2, "⚠ " + m); builder.CloseElement(); } };
+    private RenderFragment MgrMsg(string k) => builder =>
+    {
+        if (mgrErrors.TryGetValue(k, out var m))
+        {
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "class", "invalid-feedback-modern");
+            builder.AddContent(2, "⚠ " + m);
+            builder.CloseElement();
+        }
+    };
 
     private string OrderStatusClass(string s) => s switch { "Нове" => "new", "В роботі" => "in-progress", "Призупинено" => "suspended", "Скасовано" => "cancelled", "Завершено" => "completed", _ => "new" };
     private string OrderBorderColor(string s) => s switch { "Нове" => "var(--primary-blue)", "В роботі" => "#f59e0b", "Призупинено" => "#6b7280", "Скасовано" => "var(--danger-red)", "Завершено" => "var(--success-green)", _ => "var(--border-color)" };
