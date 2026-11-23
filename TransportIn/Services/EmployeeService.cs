@@ -1,5 +1,4 @@
-﻿
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -21,6 +20,11 @@ namespace TransportIn.Services
         public string LicenseCategory { get; set; } = "C, CE";
         public string MedicalCertExpiry { get; set; } = "";
         public bool IsActive { get; set; } = true;
+
+        // Дані для входу в систему (необов'язкові: без логіна обліковий запис не створюється)
+        public string Login { get; set; } = "";
+        public string Password { get; set; } = "";
+        public string Email { get; set; } = "";
     }
 
     public class EmployeeService
@@ -55,10 +59,11 @@ namespace TransportIn.Services
                 .ToList();
         }
 
-        // Добавление сотрудника
+        // Добавление сотрудника (разом з обліковим записом для входу, якщо вказано логін)
         public void AddEmployee(Employee employee)
         {
             using var db = _contextFactory.CreateDbContext();
+            using var transaction = db.Database.BeginTransaction();
 
             string roleName = employee.Role.Trim();
 
@@ -72,6 +77,16 @@ namespace TransportIn.Services
                 );
             }
 
+            var login = (employee.Login ?? "").Trim();
+            if (login.Length > 0)
+            {
+                if ((employee.Password ?? "").Length < 6)
+                    throw new InvalidOperationException("Пароль має містити мінімум 6 символів.");
+
+                if (db.Users.Any(u => u.Username == login))
+                    throw new InvalidOperationException($"Логін '{login}' вже зайнятий.");
+            }
+
             var newEmployee = new EmployeeEntity
             {
                 FullName = employee.FullName,
@@ -81,13 +96,29 @@ namespace TransportIn.Services
                 MedicalCertExpiry = employee.MedicalCertExpiry,
                 IsActive = true,
                 Address = "",
-                Email = "",
+                Email = employee.Email?.Trim() ?? "",
                 PhotoPath = "",
                 RoleId = role.Id
             };
 
             db.Employees.Add(newEmployee);
             db.SaveChanges();
+
+            if (login.Length > 0)
+            {
+                db.Users.Add(new TransportIn.Data.Entities.User
+                {
+                    Username = login,
+                    PasswordHash = PasswordHasher.Hash(employee.Password!),
+                    Role = role.Id,
+                    EmployeeId = newEmployee.Id,
+                    FullName = newEmployee.FullName,
+                    Phone = newEmployee.Phone
+                });
+                db.SaveChanges();
+            }
+
+            transaction.Commit();
 
             employee.Id = newEmployee.Id;
 

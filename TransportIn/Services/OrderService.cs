@@ -18,7 +18,7 @@ namespace TransportIn.Services
 
         public string Status { get; set; } = "Нове";
         public string AssignedVehiclePlate { get; set; } = "";
-
+        public string AssignedDriver { get; set; } = "";
         public List<CargoDraft> Cargos { get; set; } = new();
         public List<PointDraft> Points { get; set; } = new();
     }
@@ -41,9 +41,11 @@ namespace TransportIn.Services
         public string Address { get; set; } = "";
         public string ContactName { get; set; } = "";
         public string ContactPhone { get; set; } = "";
+
+        public string Status { get; set; } = "";
     }
 
-    public class OrderService
+    public partial class OrderService
     {
         private readonly IDbContextFactory<AppDbContext> _contextFactory;
 
@@ -130,8 +132,9 @@ namespace TransportIn.Services
                     DeliveryPoints = deliveryPoints.Count > 0
                         ? deliveryPoints
                         : SplitPoints(order.DeliveryPoints),
-                    AssignedVehiclePlate = latestAssignment?.Vehicle.LicensePlate
-                        ?? order.AssignedVehiclePlate,
+                    AssignedVehiclePlate = string.IsNullOrWhiteSpace(order.AssignedVehiclePlate)
+    ? (latestAssignment?.Vehicle.LicensePlate ?? "")
+    : order.AssignedVehiclePlate,
                     Status = order.Status
                 };
             }).ToList();
@@ -437,7 +440,393 @@ namespace TransportIn.Services
 
             db.SaveChanges();
         }
+        // ===== Виконання пунктів маршруту (завантаження / розвантаження) =====
 
+        // Повертає пункти замовлення за порядком відвідування.
+        // Для старих замовлень, у яких пунктів у БД ще немає, створює їх із рядків LoadingPoints/DeliveryPoints.
+        public List<PointProgress> GetPointProgress(int orderId)
+        {
+            using var db = _contextFactory.CreateDbContext();
+
+            if (!db.OrderPoints.Any(p => p.OrderId == orderId))
+                CreatePointsFromOrderStrings(db, orderId);
+
+            return db.OrderPoints
+                .AsNoTracking()
+                .Where(p => p.OrderId == orderId)
+                .OrderBy(p => p.SequenceNumber)
+                .AsEnumerable()
+                .Select(p => new PointProgress
+                {
+                    Id = p.Id,
+                    OrderId = p.OrderId,
+                    SequenceNumber = p.SequenceNumber,
+                    IsLoading = IsLoadingPoint(p.PointType),
+                    Address = p.Address,
+                    ContactName = p.ContactName,
+                    ContactPhone = p.ContactPhone,
+                    Status = p.Status,
+                    ActualArrival = p.ActualArrival
+                })
+                .ToList();
+        }
+
+        // Підтверджує наступний крок пункту. Повертає false, якщо крок недопустимий:
+        // пропущено етап, попередній пункт не завершено, замовлення скасоване/призупинене/завершене
+        // або цей крок уже підтверджено (подвійний клік).
+        public bool SetPointStatus(int pointId, string newStatus)
+        {
+            using var db = _contextFactory.CreateDbContext();
+            using var transaction = db.Database.BeginTransaction();
+
+            var point = db.OrderPoints.FirstOrDefault(p => p.Id == pointId);
+            if (point == null)
+                return false;
+
+            var order = db.Orders.FirstOrDefault(o => o.Id == point.OrderId);
+            if (order == null || order.Status is "Скасовано" or "Призупинено" or "Завершено")
+                return false;
+
+            var points = db.OrderPoints
+                .Where(p => p.OrderId == point.OrderId)
+                .OrderBy(p => p.SequenceNumber)
+                .ToList();
+
+            var index = points.FindIndex(p => p.Id == point.Id);
+
+            // Усі попередні пункти мають бути повністю завершені (водій виїхав з них)
+            if (points.Take(index).Any(p => p.Status != "Виїхав"))
+                return false;
+
+            var stages = PointWorkflow.GetStages(
+                IsLoadingPoint(point.PointType),
+                hasNextPoint: index < points.Count - 1);
+
+            var next = PointWorkflow.GetNextStageIndex(stages, point.Status);
+            if (next >= stages.Count || stages[next].Status != newStatus)
+                return false;
+
+            var previous = point.Status;
+            point.Status = newStatus;
+
+            if (newStatus == "Прибув")
+                point.ActualArrival = DateTime.UtcNow;
+
+            // Перший крок водія переводить замовлення в статус «В роботі»
+            if (order.Status != "В роботі")
+            {
+                AddHistory(db, order.Id, order.Status, "В роботі", "Водій розпочав виконання замовлення");
+                order.Status = "В роботі";
+            }
+
+            AddHistory(db, order.Id, previous, newStatus,
+                $"Пункт №{point.SequenceNumber} ({point.PointType}): {point.Address}");
+
+            db.SaveChanges();
+            transaction.Commit();
+
+            NotifyStateChanged();
+            return true;
+        }
+
+        // Завершує замовлення, коли всі пункти повністю виконані
+        public bool CompleteOrder(int orderId)
+        {
+            using var db = _contextFactory.CreateDbContext();
+            using var transaction = db.Database.BeginTransaction();
+
+            var order = db.Orders.FirstOrDefault(o => o.Id == orderId);
+            if (order == null || order.Status is "Скасовано" or "Завершено")
+                return false;
+
+            var points = db.OrderPoints
+                .Where(p => p.OrderId == orderId)
+                .OrderBy(p => p.SequenceNumber)
+                .ToList();
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                var stages = PointWorkflow.GetStages(
+                    IsLoadingPoint(points[i].PointType),
+                    hasNextPoint: i < points.Count - 1);
+
+                if (PointWorkflow.GetNextStageIndex(stages, points[i].Status) < stages.Count)
+                    return false;
+            }
+
+            AddHistory(db, order.Id, order.Status, "Завершено", "Водій підтвердив завершення замовлення");
+            order.Status = "Завершено";
+
+            db.SaveChanges();
+            transaction.Commit();
+
+            NotifyStateChanged();
+            return true;
+        }
+
+        private static void AddHistory(
+            AppDbContext db, int orderId, string previous, string current, string comment)
+        {
+            db.OrderStatusHistories.Add(new TransportIn.Data.Entities.OrderStatusHistory
+            {
+                OrderId = orderId,
+                PreviousStatus = previous ?? "",
+                NewStatus = current,
+                ChangedAt = DateTime.UtcNow,
+                ChangedByEmployeeId = null,
+                Comment = comment.Length > 500 ? comment[..500] : comment
+            });
+        }
+
+        private static void CreatePointsFromOrderStrings(AppDbContext db, int orderId)
+        {
+            var order = db.Orders.FirstOrDefault(o => o.Id == orderId);
+            if (order == null)
+                return;
+
+            var sequence = 1;
+            foreach (var address in SplitPoints(order.LoadingPoints))
+                db.OrderPoints.Add(CreateLegacyPoint(order, address, "Завантаження", sequence++));
+            foreach (var address in SplitPoints(order.DeliveryPoints))
+                db.OrderPoints.Add(CreateLegacyPoint(order, address, "Доставка", sequence++));
+
+            try
+            {
+                db.SaveChanges();
+            }
+            catch (DbUpdateException)
+            {
+                // Пункти вже створив інший запит (унікальний індекс OrderId + SequenceNumber)
+                db.ChangeTracker.Clear();
+            }
+        }
+
+        private static TransportIn.Data.Entities.OrderPoint CreateLegacyPoint(
+            OrderEntity order, string address, string pointType, int sequence) =>
+            new()
+            {
+                OrderId = order.Id,
+                PointType = pointType,
+                Address = address,
+                ContactName = order.CustomerName,
+                ContactPhone = order.CustomerPhone,
+                SequenceNumber = sequence,
+                Status = PointWorkflow.StatusNew,
+                Notes = ""
+            };
+
+        // ===== Призначення транспорту й водія, статуси замовлення (менеджер) =====
+
+        // Усі замовлення в повному вигляді: вантажі, пункти з контактами й статусами, авто, водій
+        public List<OrderDraft> GetOrderDrafts()
+        {
+            using var db = _contextFactory.CreateDbContext();
+
+            var orders = db.Orders
+                .AsNoTracking()
+                .AsSplitQuery()
+                .Include(o => o.OrderPoints)
+                .Include(o => o.OrderCargos).ThenInclude(oc => oc.Cargo)
+                .Include(o => o.OrderAssignments).ThenInclude(a => a.Vehicle)
+                .Include(o => o.OrderAssignments).ThenInclude(a => a.Driver)
+                .OrderBy(o => o.Id)
+                .ToList();
+
+            return orders.Select(order =>
+            {
+                var latest = order.OrderAssignments
+                    .OrderByDescending(a => a.AssignedAt)
+                    .FirstOrDefault();
+
+                var draft = new OrderDraft
+                {
+                    Id = order.Id,
+                    CustomerCompany = order.CustomerCompany,
+                    CustomerName = order.CustomerName,
+                    CustomerPhone = order.CustomerPhone,
+                    CustomerEmail = order.CustomerEmail,
+                    Status = order.Status,
+                    AssignedVehiclePlate = latest?.Vehicle.LicensePlate ?? order.AssignedVehiclePlate ?? "",
+                    AssignedDriver = latest?.Driver.FullName ?? ""
+                };
+
+                if (order.OrderCargos.Count > 0)
+                {
+                    foreach (var link in order.OrderCargos)
+                    {
+                        draft.Cargos.Add(new CargoDraft
+                        {
+                            Name = link.Cargo.Title,
+                            Quantity = link.Quantity,
+                            WeightTons = link.Cargo.WeightKg / 1000d,
+                            VolumeM3 = link.Cargo.VolumeM3 ?? 0,
+                            NeedsRefrigerator = link.Cargo.NeedsRefrigerator,
+                            TempMin = link.Cargo.MinTemperatureC,
+                            TempMax = link.Cargo.MaxTemperatureC,
+                            SpecialConditions = link.Cargo.SpecialConditions ?? ""
+                        });
+                    }
+                }
+                else
+                {
+                    // Старі замовлення без записів у таблицях вантажів
+                    draft.Cargos.Add(new CargoDraft
+                    {
+                        Name = order.CargoName,
+                        Quantity = 1,
+                        WeightTons = order.WeightTons,
+                        VolumeM3 = order.VolumeM3,
+                        NeedsRefrigerator = order.RequiresRefrigerator
+                    });
+                }
+
+                if (order.OrderPoints.Count > 0)
+                {
+                    foreach (var point in order.OrderPoints.OrderBy(p => p.SequenceNumber))
+                    {
+                        draft.Points.Add(new PointDraft
+                        {
+                            IsLoading = IsLoadingPoint(point.PointType),
+                            Address = point.Address,
+                            ContactName = point.ContactName,
+                            ContactPhone = point.ContactPhone,
+                            Status = point.Status
+                        });
+                    }
+                }
+                else
+                {
+                    foreach (var address in SplitPoints(order.LoadingPoints))
+                        draft.Points.Add(new PointDraft { IsLoading = true, Address = address });
+                    foreach (var address in SplitPoints(order.DeliveryPoints))
+                        draft.Points.Add(new PointDraft { IsLoading = false, Address = address });
+                }
+
+                return draft;
+            }).ToList();
+        }
+
+        // Призначає автомобіль замовленню. Якщо авто змінюється, призначення водія скидається.
+        public bool AssignVehicleToOrder(int orderId, string licensePlate)
+        {
+            using var db = _contextFactory.CreateDbContext();
+            using var transaction = db.Database.BeginTransaction();
+
+            var order = db.Orders
+                .Include(o => o.OrderAssignments)
+                .FirstOrDefault(o => o.Id == orderId);
+
+            if (order == null || order.Status is "Скасовано" or "Завершено")
+                return false;
+
+            if (!db.Vehicles.Any(v => v.LicensePlate == licensePlate))
+                return false;
+
+            if (order.AssignedVehiclePlate != licensePlate)
+                db.OrderAssignments.RemoveRange(order.OrderAssignments);
+
+            order.AssignedVehiclePlate = licensePlate;
+
+            AddHistory(db, order.Id, order.Status, "В роботі", $"Призначено транспорт {licensePlate}");
+            order.Status = "В роботі";
+
+            db.SaveChanges();
+            transaction.Commit();
+
+            NotifyStateChanged();
+            return true;
+        }
+
+        // Призначає водія. Повертає текст помилки або null, якщо все гаразд.
+        public string? AssignDriverToOrder(int orderId, string driverName)
+        {
+            using var db = _contextFactory.CreateDbContext();
+            using var transaction = db.Database.BeginTransaction();
+
+            var order = db.Orders
+                .Include(o => o.OrderAssignments)
+                .FirstOrDefault(o => o.Id == orderId);
+
+            if (order == null)
+                return "Замовлення не знайдено.";
+
+            if (string.IsNullOrWhiteSpace(order.AssignedVehiclePlate))
+                return "Спочатку призначте транспорт.";
+
+            var vehicle = db.Vehicles.FirstOrDefault(v => v.LicensePlate == order.AssignedVehiclePlate);
+            if (vehicle == null)
+                return "Транспорт не знайдено в автопарку.";
+
+            var driver = db.Employees.FirstOrDefault(e => e.FullName == driverName && e.IsActive);
+            if (driver == null)
+                return "Водія не знайдено або його деактивовано.";
+
+            var busy = db.OrderAssignments.Any(a =>
+                a.DriverId == driver.Id &&
+                a.OrderId != orderId &&
+                a.Order.Status != "Завершено" &&
+                a.Order.Status != "Скасовано");
+
+            if (busy)
+                return $"Водій {driverName} вже призначений на інше активне замовлення.";
+
+            db.OrderAssignments.RemoveRange(order.OrderAssignments);
+
+            var now = DateTime.UtcNow;
+            db.OrderAssignments.Add(new TransportIn.Data.Entities.OrderAssignment
+            {
+                OrderId = order.Id,
+                VehicleId = vehicle.Id,
+                DriverId = driver.Id,
+                AssignedAt = now,
+                PlannedStart = now,
+                PlannedEnd = now.AddHours(8), // орієнтовна тривалість зміни
+                Status = "Призначено",
+                Notes = ""
+            });
+
+            AddHistory(db, order.Id, order.Status, order.Status, $"Призначено водія {driver.FullName}");
+
+            db.SaveChanges();
+            transaction.Commit();
+
+            NotifyStateChanged();
+            return null;
+        }
+
+        public void UnassignDriver(int orderId)
+        {
+            using var db = _contextFactory.CreateDbContext();
+
+            var items = db.OrderAssignments.Where(a => a.OrderId == orderId).ToList();
+            if (items.Count == 0)
+                return;
+
+            var status = db.Orders.Where(o => o.Id == orderId).Select(o => o.Status).FirstOrDefault() ?? "";
+
+            db.OrderAssignments.RemoveRange(items);
+            AddHistory(db, orderId, status, status, "Скасовано призначення водія");
+
+            db.SaveChanges();
+            NotifyStateChanged();
+        }
+
+        // Зміна статусу замовлення менеджером (призупинення, відновлення, скасування, завершення)
+        public bool SetOrderStatus(int orderId, string newStatus, string comment)
+        {
+            using var db = _contextFactory.CreateDbContext();
+
+            var order = db.Orders.FirstOrDefault(o => o.Id == orderId);
+            if (order == null || order.Status is "Скасовано" or "Завершено")
+                return false;
+
+            AddHistory(db, order.Id, order.Status, newStatus, comment);
+            order.Status = newStatus;
+
+            db.SaveChanges();
+            NotifyStateChanged();
+            return true;
+        }
         private void NotifyStateChanged()
         {
             OnChange?.Invoke();

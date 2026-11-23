@@ -202,7 +202,7 @@
                                         <div style="color:var(--text-secondary);font-size:.82rem;margin-bottom:.5rem">
                                             <i class="bi bi-box-seam me-1"></i> Вантажів: @o.Cargos.Count ·
                                             <i class="bi bi-geo-alt me-1"></i> Точок: @o.Points.Count ·
-                                            <i class="bi bi-truck me-1"></i> @(string.IsNullOrEmpty(o.AssignedVehiclePlate) ? "ТЗ не призначено" : o.AssignedVehiclePlate)
+                                            <i class="bi bi-truck me-1"></i> @(o.Vehicles.Count == 0 ? "ТЗ не призначено" : string.Join(", ", o.Vehicles.Select(v => v.Plate)))
                                         </div>
 
                                         <div style="font-size:.82rem;color:var(--text-secondary);margin-bottom:.75rem">
@@ -213,44 +213,55 @@
                                                     @(p.IsLoading ? "З" : "Д")
                                                 </span>
                                                 <span>@p.Address</span>
+                                                @if (!string.IsNullOrEmpty(p.Status) && p.Status != "Нова")
+                                                {
+                                                    <span class="status-badge in-progress" style="font-size:.68rem;padding:.1rem .4rem;margin-left:.3rem">@p.Status</span>
+                                                }
 
                                                 <br>
                                             }
                                         </div>
 
-                                        @if (!string.IsNullOrEmpty(o.AssignedVehiclePlate) && string.IsNullOrEmpty(o.AssignedDriver) && o.Status != "Скасовано" && o.Status != "Завершено")
+                                        @foreach (var slot in o.Vehicles)
                                         {
-                                            <div class="row g-2 mb-2 align-items-end">
-                                                <div class="col-md-8">
-                                                    <label class="form-label-modern">Призначити водія</label>
-                                                    <select class="dark-input w-100" value="@GetPendingDriver(o.Id)" @onchange="e => SetPendingDriver(o.Id, e)">
-                                                        <option value="">— обрати —</option>
-                                                        @foreach (var d in AvailableDriversFor(o))
-                                                        {
-                                                            <option value="@d">@d</option>
-                                                        }
-                                                    </select>
-                                                </div>
-                                                <div class="col-md-4">
-                                                    <button class="btn-action assign w-100" @onclick="() => AssignDriver(o)"><i class="bi bi-person-check"></i> Призначити</button>
-                                                </div>
-                                            </div>
-                                            @if (driverWarnings.TryGetValue(o.Id, out var dw))
+                                            var key = DriverKey(o.Id, slot.Plate);
+                                            if (string.IsNullOrEmpty(slot.Driver))
                                             {
-                                                <div class="mt-2 p-2" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#fbbf24;font-size:.82rem">
-                                                    <i class="bi bi-exclamation-triangle-fill me-1"></i> @dw
+                                                if (o.Status != "Скасовано" && o.Status != "Завершено")
+                                                {
+                                                    <div class="row g-2 mb-2 align-items-end">
+                                                        <div class="col-md-8">
+                                                            <label class="form-label-modern">Водій для <span class="code-text">@slot.Plate</span></label>
+                                                            <select class="dark-input w-100" value="@GetPendingDriver(key)" @onchange="e => SetPendingDriver(key, e)">
+                                                                <option value="">— обрати —</option>
+                                                                @foreach (var d in AvailableDriversFor(o))
+                                                                {
+                                                                    <option value="@d">@d</option>
+                                                                }
+                                                            </select>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <button class="btn-action assign w-100" @onclick="() => AssignDriver(o, slot.Plate)"><i class="bi bi-person-check"></i> Призначити</button>
+                                                        </div>
+                                                    </div>
+                                                    if (driverWarnings.TryGetValue(key, out var dw))
+                                                    {
+                                                        <div class="mt-2 mb-2 p-2" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#fbbf24;font-size:.82rem">
+                                                            <i class="bi bi-exclamation-triangle-fill me-1"></i> @dw
+                                                        </div>
+                                                    }
+                                                }
+                                            }
+                                            else
+                                            {
+                                                <div class="d-flex justify-content-between align-items-center" style="background:rgba(16,185,129,.1);padding:.5rem .75rem;border-radius:6px;font-size:.82rem;color:#34d399;margin-bottom:.75rem">
+                                                    <span><i class="bi bi-person-badge me-1"></i> <span class="code-text">@slot.Plate</span> · Водій: <strong>@slot.Driver</strong></span>
+                                                    @if (o.Status != "Скасовано" && o.Status != "Завершено")
+                                                    {
+                                                        <button class="btn-action" style="padding:.15rem .5rem" @onclick="() => UnassignDriver(o, slot.Plate)"><i class="bi bi-x"></i> Змінити</button>
+                                                    }
                                                 </div>
                                             }
-                                        }
-                                        else if (!string.IsNullOrEmpty(o.AssignedDriver))
-                                        {
-                                            <div class="d-flex justify-content-between align-items-center" style="background:rgba(16,185,129,.1);padding:.5rem .75rem;border-radius:6px;font-size:.82rem;color:#34d399;margin-bottom:.75rem">
-                                                <span><i class="bi bi-person-badge me-1"></i> Водій: <strong>@o.AssignedDriver</strong></span>
-                                                @if (o.Status != "Скасовано" && o.Status != "Завершено")
-                                                {
-                                                    <button class="btn-action" style="padding:.15rem .5rem" @onclick="() => UnassignDriver(o)"><i class="bi bi-x"></i> Змінити</button>
-                                                }
-                                            </div>
                                         }
 
                                         <div class="order-actions">
@@ -262,7 +273,7 @@
                                             {
                                                 <button class="btn-action" @onclick="() => SelectForMatching(o)"><i class="bi bi-search"></i> Підібрати ТЗ</button>
                                             }
-                                            @if (o.Status == "В роботі" && !string.IsNullOrEmpty(o.AssignedVehiclePlate) && !string.IsNullOrEmpty(o.AssignedDriver))
+                                            @if (o.Status == "В роботі" && o.Vehicles.Count > 0 && o.Vehicles.All(v => !string.IsNullOrEmpty(v.Driver)))
                                             {
                                                 <button class="btn-action assign" @onclick="() => CompleteOrder(o)"><i class="bi bi-check2-all"></i> Завершити</button>
                                             }
@@ -282,7 +293,7 @@
                     {
                         <div class="modern-card mb-4" style="border:1px solid var(--primary-blue)">
                             <div class="card-header-custom">
-                                <h5><span class="header-icon blue"><i class="bi bi-truck"></i></span> Рекомендовані ТЗ для №@selectedOrder.Id</h5>
+                                <h5><span class="header-icon blue"><i class="bi bi-truck"></i></span> Підбір ТЗ для №@selectedOrder.Id</h5>
                                 <button class="btn-modern btn-danger-modern py-1 px-2" @onclick="() => selectedOrder = null"><i class="bi bi-x-lg"></i></button>
                             </div>
                             <div class="card-body-custom">
@@ -294,38 +305,65 @@
                                 }
                                 @{
                                     var suitable = GetSuitableVehicles(selectedOrder);
+                                    var showAll = showAllVehicles || suitable.Count == 0;
+                                    var allVehicles = FleetService.GetAllVehicles();
+                                    var candidates = showAll ? allVehicles : suitable;
+                                    var chosen = allVehicles.Where(v => selectedPlates.Contains(v.LicensePlate)).ToList();
+                                    var coverageError = chosen.Count == 0 ? null : CoverageError(selectedOrder, chosen);
                                 }
+
+                                <div class="mb-3" style="font-size:.85rem;color:var(--text-secondary)">
+                                    Потрібно: <strong style="color:var(--text-primary)">@NeedText(selectedOrder)</strong>
+                                    · Обрано: <strong style="color:var(--text-primary)">@chosen.Sum(v => v.CapacityTons) т, @chosen.Sum(v => v.VolumeM3) м³</strong>
+                                </div>
+
                                 @if (suitable.Count == 0)
                                 {
-                                    <div class="p-3 text-center" style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:#f87171">
-                                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                                        Не знайдено ТЗ, що відповідає вимогам. Можливо, потрібно декілька машин.
+                                    <div class="mb-3 p-2" style="background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);border-radius:6px;color:#60a5fa;font-size:.82rem">
+                                        <i class="bi bi-info-circle-fill me-1"></i>
+                                        Жоден окремий ТЗ не підходить. Оберіть кілька автомобілів: їх сумарна вантажопідйомність і об'єм мають покрити замовлення.
                                     </div>
                                 }
                                 else
                                 {
-                                    <div class="table-responsive">
-                                        <table class="modern-table">
-                                            <thead><tr><th>Модель</th><th>Номер</th><th>Вантаж.</th><th>Об'єм</th><th>Реф.</th><th>Водій</th><th></th></tr></thead>
-                                            <tbody>
-                                                @foreach (var v in suitable)
-                                                {
-                                                    <tr class="match-table-row @(selectedVehicle == v.LicensePlate ? "selected" : "")" @onclick="() => selectedVehicle = v.LicensePlate">
-                                                        <td><strong>@v.BrandModel</strong></td>
-                                                        <td><span class="code-text">@v.LicensePlate</span></td>
-                                                        <td>@v.CapacityTons т</td>
-                                                        <td>@v.VolumeM3 м³</td>
-                                                        <td>@(v.HasRefrigerator ? "✅" : "—")</td>
-                                                        <td>@(string.IsNullOrEmpty(v.AssignedDriver) ? "—" : v.AssignedDriver)</td>
-                                                        <td>
-                                                            <button class="btn-modern btn-add py-1 px-3" style="height:auto" @onclick="() => AssignVehicle(selectedOrder!.Id, v.LicensePlate)" @onclick:stopPropagation="true"><i class="bi bi-check-lg"></i></button>
-                                                        </td>
-                                                    </tr>
-                                                }
-                                            </tbody>
-                                        </table>
+                                    <div class="mb-3">
+                                        <button class="btn-action" @onclick="() => showAllVehicles = !showAllVehicles">
+                                            <i class="bi bi-truck"></i> @(showAllVehicles ? "Показати лише окремі підходящі ТЗ" : "Вантаж треба розділити між кількома ТЗ")
+                                        </button>
                                     </div>
                                 }
+
+                                <div class="table-responsive">
+                                    <table class="modern-table">
+                                        <thead><tr><th></th><th>Модель</th><th>Номер</th><th>Вантаж.</th><th>Об'єм</th><th>Реф.</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var v in candidates)
+                                            {
+                                                <tr class="match-table-row @(selectedPlates.Contains(v.LicensePlate) ? "selected" : "")" @onclick="() => TogglePlate(v.LicensePlate)">
+                                                    <td><input type="checkbox" checked="@selectedPlates.Contains(v.LicensePlate)" @onclick="() => TogglePlate(v.LicensePlate)" @onclick:stopPropagation="true" /></td>
+                                                    <td><strong>@v.BrandModel</strong></td>
+                                                    <td><span class="code-text">@v.LicensePlate</span></td>
+                                                    <td>@v.CapacityTons т</td>
+                                                    <td>@v.VolumeM3 м³</td>
+                                                    <td>@(v.HasRefrigerator ? "✅" : "—")</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                @if (coverageError != null)
+                                {
+                                    <div class="mt-3 p-2" style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:6px;color:#f87171;font-size:.82rem">
+                                        <i class="bi bi-exclamation-triangle-fill me-1"></i> @coverageError
+                                    </div>
+                                }
+
+                                <div class="mt-3">
+                                    <button class="btn-modern btn-add" style="height:auto;padding:.5rem 1rem" disabled="@(chosen.Count == 0 || coverageError != null)" @onclick="AssignSelectedVehicles">
+                                        <i class="bi bi-check-lg"></i> Призначити обране (@chosen.Count)
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     }
@@ -439,63 +477,64 @@
     private string confirmPlate = "";
     private int? editingId;
     private Dictionary<string, string> mgrErrors = new();
-    private Dictionary<int, string> pendingDrivers = new();
-    private Dictionary<int, string> driverWarnings = new();
+    private Dictionary<string, string> pendingDrivers = new();
+    private Dictionary<string, string> driverWarnings = new();
     private List<OrderVM> orders = new();
     private List<MessageVM> messages = new();
     private OrderVM? selectedOrder;
-    private string selectedVehicle = "";
+    private HashSet<string> selectedPlates = new();
+    private bool showAllVehicles;
     private MessageVM? openedMessage;
     private MessageVM? replyingTo;
     private string replyText = "";
 
 
-    private List<string> allDrivers = new() { "Коваленко І. П.", "Бондар В. М.", "Шевченко О. О." };
+    private List<string> allDrivers = new();
+
     private void LoadOrders()
     {
-        var dbOrders = OrderService.GetAllOrders();
-
-        orders = dbOrders.Select(o => new OrderVM
+        var managerOrders = OrderService.GetManagerOrders();
+        orders = managerOrders.Select(m => m.Draft).Select(d => new OrderVM
         {
-            Id = o.Id,
-
-            CustomerCompany = o.CustomerCompany,
-            CustomerName = o.CustomerName,
-            CustomerPhone = o.CustomerPhone,
-            CustomerEmail = o.CustomerEmail,
-
-            Status = o.Status,
-            PrevStatus = o.Status,
-
-            AssignedVehiclePlate = o.AssignedVehiclePlate,
-
-            Cargos = string.IsNullOrWhiteSpace(o.CargoName)
-                ? new List<CargoForm>()
-                : o.CargoName
-                    .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-                    .Select(name => new CargoForm
-                    {
-                        Name = name,
-                        Quantity = 1
-                    })
-                    .ToList(),
-
-            Points = o.LoadingPoints
-                .Select(address => new PointForm
-                {
-                    IsLoading = true,
-                    Address = address
-                })
-                .Concat(
-                    o.DeliveryPoints.Select(address => new PointForm
-                    {
-                        IsLoading = false,
-                        Address = address
-                    })
-                )
-                .ToList()
-
+            Id = d.Id,
+            CustomerCompany = d.CustomerCompany,
+            CustomerName = d.CustomerName,
+            CustomerPhone = d.CustomerPhone,
+            CustomerEmail = d.CustomerEmail,
+            Status = d.Status,
+            Vehicles = managerOrders.First(m => m.Draft.Id == d.Id).Vehicles,
+            AssignedVehiclePlate = string.Join("; ", managerOrders.First(m => m.Draft.Id == d.Id).Vehicles.Select(v => v.Plate)),
+            Cargos = d.Cargos.Select(c => new CargoForm
+            {
+                Name = c.Name,
+                Quantity = c.Quantity,
+                WeightTons = c.WeightTons,
+                VolumeM3 = c.VolumeM3,
+                NeedsRefrigerator = c.NeedsRefrigerator,
+                TempMin = c.TempMin ?? 0,
+                TempMax = c.TempMax ?? 0,
+                SpecialConditions = c.SpecialConditions
+            }).ToList(),
+            Points = d.Points.Select(p => new PointForm
+            {
+                IsLoading = p.IsLoading,
+                Address = p.Address,
+                ContactName = p.ContactName,
+                ContactPhone = p.ContactPhone,
+                Status = p.Status,
+                OperationType = p.IsLoading ? "Передача" : "Отримання"
+            }).ToList()
         }).ToList();
+
+        // Список водіїв з БД: активні працівники з роллю «Водій»
+        allDrivers = EmployeeService.GetAllEmployees()
+            .Where(e => e.IsActive && e.Role == "Водій")
+            .Select(e => e.FullName)
+            .ToList();
+
+        // Після перезавантаження списку вибране замовлення має вказувати на свіжий об'єкт
+        if (selectedOrder != null)
+            selectedOrder = orders.FirstOrDefault(x => x.Id == selectedOrder.Id);
     }
 
     private class OrderForm
@@ -510,12 +549,12 @@
     }
     private class PointForm
     {
-        public bool IsLoading = true; public string Address = ""; public string ContactName = ""; public string ContactPhone = ""; public string OperationType = "Передача";
+        public bool IsLoading = true; public string Address = ""; public string ContactName = ""; public string ContactPhone = ""; public string OperationType = "Передача"; public string Status = "";
     }
     private class OrderVM
     {
         public int Id; public string CustomerCompany = ""; public string CustomerName = ""; public string CustomerPhone = ""; public string CustomerEmail = "";
-        public string Status = "Нове"; public string PrevStatus = "Нове"; public string AssignedVehiclePlate = ""; public string AssignedDriver = "";
+        public string Status = "Нове"; public string PrevStatus = "Нове"; public string AssignedVehiclePlate = ""; public List<TransportIn.Services.VehicleSlot> Vehicles = new();
         public List<CargoForm> Cargos = new(); public List<PointForm> Points = new();
     }
     private class ReplyVM { public string Text = ""; public string Time = ""; }
@@ -532,15 +571,6 @@
 
     protected override void OnInitialized()
     {
-        Console.WriteLine("MANAGER DASHBOARD ЗАПУЩЕН");
-        Console.WriteLine($"USER: {AuthService.CurrentUser?.Username ?? "NULL"}");
-        Console.WriteLine("ОТКРЫТА СТРАНИЦА МЕНЕДЖЕРА");
-        Console.WriteLine($"CURRENT USER: {AuthService.CurrentUser?.Username ?? "NULL"}");
-        Console.WriteLine("MANAGER DASHBOARD");
-        Console.WriteLine($"CURRENT USER: {AuthService.CurrentUser?.Username ?? "NULL"}");
-        Console.WriteLine("ОТКРЫТА СТРАНИЦА МЕНЕДЖЕРА");
-        Console.WriteLine($"ПОЛЬЗОВАТЕЛЬ: {AuthService.CurrentUser?.Username ?? "NULL"}");
-        Console.WriteLine($"РОЛЬ: {AuthService.CurrentUser?.Role.ToString() ?? "NULL"}");
         if (AuthService.CurrentUser?.Role != TransportIn.Models.UserRole.Manager)
         {
             Navigation.NavigateTo(GetRedirectPath(AuthService.CurrentUser?.Role));
@@ -549,8 +579,7 @@
 
         OrderService.OnChange += OnChanged;
         FleetService.OnChange += OnChanged;
-        OrderService.OnChange += OnChanged;
-        FleetService.OnChange += OnChanged;
+        EmployeeService.OnChange += OnChanged;
 
         LoadOrders();
 
@@ -562,7 +591,11 @@
         };
     }
 
-    private void OnChanged() => InvokeAsync(StateHasChanged);
+    private void OnChanged() => InvokeAsync(() =>
+    {
+        LoadOrders();
+        StateHasChanged();
+    });
 
     // ===== Форма: вантажі / точки =====
     private void AddCargo() => newOrder.Cargos.Add(new CargoForm());
@@ -572,24 +605,24 @@
     private void RemovePoint(int idx) { if (idx >= 0 && idx < newOrder.Points.Count) newOrder.Points.RemoveAt(idx); }
 
     private static CargoForm CloneCargo(CargoForm c) => new()
-        {
-            Name = c.Name,
-            Quantity = c.Quantity,
-            WeightTons = c.WeightTons,
-            VolumeM3 = c.VolumeM3,
-            NeedsRefrigerator = c.NeedsRefrigerator,
-            TempMin = c.NeedsRefrigerator ? c.TempMin : 0,
-            TempMax = c.NeedsRefrigerator ? c.TempMax : 0,
-            SpecialConditions = c.SpecialConditions
-        };
+    {
+        Name = c.Name,
+        Quantity = c.Quantity,
+        WeightTons = c.WeightTons,
+        VolumeM3 = c.VolumeM3,
+        NeedsRefrigerator = c.NeedsRefrigerator,
+        TempMin = c.NeedsRefrigerator ? c.TempMin : 0,
+        TempMax = c.NeedsRefrigerator ? c.TempMax : 0,
+        SpecialConditions = c.SpecialConditions
+    };
     private static PointForm ClonePoint(PointForm p) => new()
-        {
-            IsLoading = p.IsLoading,
-            Address = p.Address,
-            ContactName = p.ContactName,
-            ContactPhone = p.ContactPhone,
-            OperationType = p.IsLoading ? "Передача" : "Отримання"
-        };
+    {
+        IsLoading = p.IsLoading,
+        Address = p.Address,
+        ContactName = p.ContactName,
+        ContactPhone = p.ContactPhone,
+        OperationType = p.IsLoading ? "Передача" : "Отримання"
+    };
 
     // ===== Створення / редагування =====
     private bool Validate()
@@ -689,14 +722,14 @@
         editingId = o.Id;
         mgrErrors.Clear();
         newOrder = new OrderForm
-            {
-                CustomerCompany = o.CustomerCompany,
-                CustomerName = o.CustomerName,
-                CustomerPhone = o.CustomerPhone,
-                CustomerEmail = o.CustomerEmail,
-                Cargos = o.Cargos.Select(CloneCargo).ToList(),
-                Points = o.Points.Select(ClonePoint).ToList()
-            };
+        {
+            CustomerCompany = o.CustomerCompany,
+            CustomerName = o.CustomerName,
+            CustomerPhone = o.CustomerPhone,
+            CustomerEmail = o.CustomerEmail,
+            Cargos = o.Cargos.Select(CloneCargo).ToList(),
+            Points = o.Points.Select(ClonePoint).ToList()
+        };
         mgrTab = "customer";
     }
 
@@ -711,75 +744,167 @@
     // ===== Підбір ТЗ / призначення =====
     private void SelectForMatching(OrderVM o)
     {
-        selectedOrder = o; selectedVehicle = ""; matchWarning = ""; confirmPlate = "";
+        selectedOrder = o;
+        selectedPlates = o.Vehicles.Select(v => v.Plate).ToHashSet();
+        showAllVehicles = o.Vehicles.Count > 1;
+        matchWarning = ""; confirmPlate = "";
     }
 
-    private void AssignVehicle(int orderId, string plate)
+    private void TogglePlate(string plate)
     {
-        var busy = orders.Any(x => x.Id != orderId && x.AssignedVehiclePlate == plate
-                                   && (x.Status == "В роботі" || x.Status == "Призупинено"));
-        if (busy && confirmPlate != plate)
+        if (!selectedPlates.Remove(plate))
+            selectedPlates.Add(plate);
+        matchWarning = ""; confirmPlate = "";
+    }
+
+    private static string DriverKey(int orderId, string plate) => $"{orderId}|{plate}";
+
+    // Загальна вага й об'єм замовлення з урахуванням кількості
+    private static string NeedText(OrderVM o)
+    {
+        var weight = o.Cargos.Sum(c => c.WeightTons * c.Quantity);
+        var volume = o.Cargos.Sum(c => c.VolumeM3 * c.Quantity);
+        var text = $"{weight:0.##} т, {volume:0.##} м³";
+        return o.Cargos.Any(c => c.NeedsRefrigerator) ? text + " ❄️" : text;
+    }
+
+    // Чи вистачає обраних авто разом (вантажопідйомність, об'єм, рефрижератор). null — усе гаразд
+    private static string? CoverageError(OrderVM o, List<TransportIn.Models.Vehicle> chosen)
+    {
+        var weight = o.Cargos.Sum(c => c.WeightTons * c.Quantity);
+        var volume = o.Cargos.Sum(c => c.VolumeM3 * c.Quantity);
+        var refCargos = o.Cargos.Where(c => c.NeedsRefrigerator).ToList();
+        var refWeight = refCargos.Sum(c => c.WeightTons * c.Quantity);
+        var refVolume = refCargos.Sum(c => c.VolumeM3 * c.Quantity);
+
+        var capacity = chosen.Sum(v => v.CapacityTons);
+        if (capacity < weight)
+            return $"Недостатня вантажопідйомність: обрано {capacity:0.##} т, потрібно {weight:0.##} т.";
+
+        var space = chosen.Sum(v => v.VolumeM3);
+        if (space < volume)
+            return $"Недостатній об'єм кузова: обрано {space:0.##} м³, потрібно {volume:0.##} м³.";
+
+        if (refCargos.Count > 0)
         {
-            matchWarning = $"Увага! Транспорт {plate} вже призначений на інше активне замовлення. Натисніть ✓ ще раз, щоб призначити все одно.";
-            confirmPlate = plate;
+            var fridge = chosen.Where(v => v.HasRefrigerator).ToList();
+            if (fridge.Count == 0)
+                return "Для цього замовлення потрібен автомобіль із рефрижератором.";
+            if (fridge.Sum(v => v.CapacityTons) < refWeight || fridge.Sum(v => v.VolumeM3) < refVolume)
+                return "Рефрижераторів недостатньо для вантажів, що потребують температурного режиму.";
+        }
+
+        return null;
+    }
+
+    private void AssignSelectedVehicles()
+    {
+        if (selectedOrder == null) return;
+
+        var orderId = selectedOrder.Id;
+        var plates = selectedPlates.ToList();
+
+        var busyPlates = orders
+            .Where(x => x.Id != orderId && (x.Status == "В роботі" || x.Status == "Призупинено"))
+            .SelectMany(x => x.Vehicles.Select(v => v.Plate))
+            .Where(p => plates.Contains(p))
+            .Distinct()
+            .ToList();
+
+        var key = string.Join(";", plates.OrderBy(p => p));
+        if (busyPlates.Count > 0 && confirmPlate != key)
+        {
+            matchWarning = $"Увага! Транспорт {string.Join(", ", busyPlates)} вже призначений на інше активне замовлення. Натисніть «Призначити» ще раз, щоб призначити все одно.";
+            confirmPlate = key;
             return;
         }
 
-        var o = orders.FirstOrDefault(x => x.Id == orderId);
-        if (o == null) return;
-        if (o.AssignedVehiclePlate != plate) { o.AssignedDriver = ""; pendingDrivers.Remove(o.Id); }
-        o.AssignedVehiclePlate = plate;
-        o.Status = "В роботі";
-        selectedOrder = null; selectedVehicle = ""; matchWarning = ""; confirmPlate = "";
+        var error = OrderService.AssignVehiclesToOrder(orderId, plates);
+        if (error != null)
+        {
+            matchWarning = error;
+            return;
+        }
+
+        selectedOrder = null; selectedPlates.Clear(); showAllVehicles = false; matchWarning = ""; confirmPlate = "";
+        LoadOrders();
     }
 
-    private string GetPendingDriver(int orderId) => pendingDrivers.TryGetValue(orderId, out var d) ? d : "";
-    private void SetPendingDriver(int orderId, ChangeEventArgs e)
+    private string GetPendingDriver(string key) => pendingDrivers.TryGetValue(key, out var d) ? d : "";
+    private void SetPendingDriver(string key, ChangeEventArgs e)
     {
-        pendingDrivers[orderId] = e.Value?.ToString() ?? "";
-        driverWarnings.Remove(orderId);
+        pendingDrivers[key] = e.Value?.ToString() ?? "";
+        driverWarnings.Remove(key);
     }
 
+    // Водії, які ще не зайняті: ні в інших активних замовленнях, ні на інших авто цього замовлення
     private IEnumerable<string> AvailableDriversFor(OrderVM o)
     {
-        var busy = orders.Where(x => x.Id != o.Id && (x.Status == "В роботі" || x.Status == "Призупинено"))
-                         .Select(x => x.AssignedDriver).Where(d => !string.IsNullOrEmpty(d)).ToHashSet();
+        var busy = orders
+            .Where(x => x.Id == o.Id || x.Status == "В роботі" || x.Status == "Призупинено")
+            .SelectMany(x => x.Vehicles)
+            .Select(v => v.Driver)
+            .Where(d => !string.IsNullOrEmpty(d))
+            .ToHashSet();
         return allDrivers.Where(d => !busy.Contains(d));
     }
 
-    private void AssignDriver(OrderVM o)
+    private void AssignDriver(OrderVM o, string plate)
     {
-        var d = GetPendingDriver(o.Id);
-        if (string.IsNullOrEmpty(d)) { driverWarnings[o.Id] = "Оберіть водія зі списку."; return; }
-        o.AssignedDriver = d;
-        pendingDrivers.Remove(o.Id);
-        driverWarnings.Remove(o.Id);
+        var key = DriverKey(o.Id, plate);
+        var d = GetPendingDriver(key);
+        if (string.IsNullOrEmpty(d)) { driverWarnings[key] = "Оберіть водія зі списку."; return; }
+
+        var error = OrderService.AssignDriverToVehicle(o.Id, plate, d);
+        if (error != null) { driverWarnings[key] = error; return; }
+
+        pendingDrivers.Remove(key);
+        driverWarnings.Remove(key);
+        LoadOrders();
     }
 
-    private void UnassignDriver(OrderVM o) { o.AssignedDriver = ""; }
+    private void UnassignDriver(OrderVM o, string plate)
+    {
+        OrderService.UnassignDriverFromVehicle(o.Id, plate);
+        LoadOrders();
+    }
 
     // ===== Статуси =====
     private void SuspendOrder(OrderVM o)
     {
-        if (o.Status == "Призупинено") o.Status = o.PrevStatus;
-        else { o.PrevStatus = o.Status; o.Status = "Призупинено"; }
+        if (o.Status == "Призупинено")
+        {
+            // Відновлення: з авто — «В роботі», без авто — «Нове»
+            var restored = string.IsNullOrEmpty(o.AssignedVehiclePlate) ? "Нове" : "В роботі";
+            OrderService.SetOrderStatus(o.Id, restored, "Замовлення відновлено");
+        }
+        else
+        {
+            OrderService.SetOrderStatus(o.Id, "Призупинено", "Замовлення призупинено менеджером");
+        }
         if (selectedOrder?.Id == o.Id) selectedOrder = null;
+        LoadOrders();
     }
 
     private void CancelOrder(OrderVM o)
     {
-        o.Status = "Скасовано";
+        OrderService.SetOrderStatus(o.Id, "Скасовано", "Замовлення скасовано менеджером");
         if (selectedOrder?.Id == o.Id) selectedOrder = null;
         if (editingId == o.Id) ResetForm();
+        LoadOrders();
     }
 
-    private void CompleteOrder(OrderVM o) { o.Status = "Завершено"; }
+    private void CompleteOrder(OrderVM o)
+    {
+        OrderService.SetOrderStatus(o.Id, "Завершено", "Замовлення завершено менеджером");
+        LoadOrders();
+    }
 
     private List<TransportIn.Models.Vehicle> GetSuitableVehicles(OrderVM o)
     {
         var all = FleetService.GetAllVehicles();
-        var totalWeight = o.Cargos.Sum(c => c.WeightTons);
-        var totalVolume = o.Cargos.Sum(c => c.VolumeM3);
+        var totalWeight = o.Cargos.Sum(c => c.WeightTons * c.Quantity);
+        var totalVolume = o.Cargos.Sum(c => c.VolumeM3 * c.Quantity);
         var needsRef = o.Cargos.Any(c => c.NeedsRefrigerator);
         return all.Where(v => v.CapacityTons >= totalWeight && v.VolumeM3 >= totalVolume && (!needsRef || v.HasRefrigerator)).ToList();
     }
@@ -826,5 +951,6 @@
     {
         OrderService.OnChange -= OnChanged;
         FleetService.OnChange -= OnChanged;
+        EmployeeService.OnChange -= OnChanged;
     }
 }

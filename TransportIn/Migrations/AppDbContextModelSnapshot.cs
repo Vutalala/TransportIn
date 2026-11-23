@@ -76,10 +76,15 @@ namespace TransportIn.Migrations
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<double?>("MaxTemperatureC")
-                        .HasColumnType("double precision");
+                        .HasColumnType("double precision")
+                        .HasColumnName("TempMax");
 
                     b.Property<double?>("MinTemperatureC")
-                        .HasColumnType("double precision");
+                        .HasColumnType("double precision")
+                        .HasColumnName("TempMin");
+
+                    b.Property<bool>("NeedsRefrigerator")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("RecipientName")
                         .IsRequired()
@@ -95,6 +100,9 @@ namespace TransportIn.Migrations
 
                     b.Property<string>("SenderPhone")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("SpecialConditions")
                         .HasColumnType("text");
 
                     b.Property<string>("Title")
@@ -115,7 +123,7 @@ namespace TransportIn.Migrations
 
                     b.ToTable("Cargos", t =>
                         {
-                            t.HasCheckConstraint("CK_Cargos_TemperatureRange", "\"MinTemperatureC\" IS NULL OR \"MaxTemperatureC\" IS NULL OR \"MinTemperatureC\" <= \"MaxTemperatureC\"");
+                            t.HasCheckConstraint("CK_Cargos_TemperatureRange", "\"TempMin\" IS NULL OR \"TempMax\" IS NULL OR \"TempMin\" <= \"TempMax\"");
 
                             t.HasCheckConstraint("CK_Cargos_VolumeM3_NonNegative", "\"VolumeM3\" IS NULL OR \"VolumeM3\" >= 0");
                         });

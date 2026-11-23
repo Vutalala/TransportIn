@@ -190,13 +190,29 @@
 
                                 <!-- Кнопки дій -->
                                 <div class="stage-actions">
-                                    @if (currentStageIndex < stages.Count && stages[currentStageIndex].State == "active" && !isBlockedByThreat)
+                                    @if (IsSuspended)
+                                    {
+                                        <div class="threat-alert-driver" style="margin-top:1rem;width:100%">
+                                            <div class="threat-title"><i class="bi bi-pause-circle-fill"></i> Замовлення призупинено</div>
+                                            <div class="threat-body">
+                                                @if (IsFinalStageActive)
+                                                {
+                                                    <text>Менеджер призупинив це замовлення, але всі пункти вже виконані, тому ви можете його завершити.</text>
+                                                }
+                                                else
+                                                {
+                                                    <text>Менеджер призупинив це замовлення. Продовжити можна після відновлення, ваш прогрес збережено.</text>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                    @if (currentStageIndex < stages.Count && stages[currentStageIndex].State == "active" && (!IsSuspended || IsFinalStageActive) && !IsCurrentStageBlocked)
                                     {
                                         <button class="btn-stage primary" @onclick="ConfirmStage">
                                             <i class="bi bi-check-circle-fill"></i> @stages[currentStageIndex].ButtonLabel
                                         </button>
                                     }
-                                    @if (isBlockedByThreat)
+                                    @if (IsCurrentStageBlocked)
                                     {
                                         <div class="threat-alert-driver danger" style="margin-top:1rem;width:100%">
                                             <div class="threat-title"><i class="bi bi-exclamation-triangle-fill"></i> Рух заблоковано</div>
@@ -307,6 +323,7 @@
     private class StageVM
     {
         public int Number; public string Label = ""; public string ButtonLabel = ""; public string State = "pending"; public string Time = "";
+        public int PointId; public string TargetStatus = ""; public bool IsDeparture; public bool IsFinal;
         public string StateClass => State;
     }
 
@@ -323,7 +340,6 @@
         OrderService.OnChange += OnOrderChanged;
         CheckThreatBlock();
         LoadCurrentOrder();
-        InitStages();
     }
 
     private void OnEmergencyChanged()
@@ -332,66 +348,122 @@
         InvokeAsync(StateHasChanged);
     }
 
+    // Подія приходить із сесії менеджера, тому оновлюємо в потоці цієї сторінки
     private void OnOrderChanged()
     {
-        LoadCurrentOrder();
-        InvokeAsync(StateHasChanged);
+        InvokeAsync(() =>
+        {
+            LoadCurrentOrder();
+            StateHasChanged();
+        });
     }
+
+    // Замовлення призупинено менеджером: кроки недоступні
+    private bool IsSuspended => currentOrder?.Status == "Призупинено";
+
+    // Поточний етап — завершення замовлення (усі пункти виконані)
+    private bool IsFinalStageActive => currentStageIndex < stages.Count && stages[currentStageIndex].IsFinal;
+
+    // Тривога блокує лише підтвердження виїзду; прибуття, завантаження й розвантаження дозволені
+    private bool IsCurrentStageBlocked =>
+        isBlockedByThreat && currentStageIndex < stages.Count && stages[currentStageIndex].IsDeparture;
 
     private void LoadCurrentOrder()
     {
-        // Беремо актуальне замовлення з сервісу (яке підключене до БД або сховища)
-        var dbOrder = OrderService.GetAllOrders().FirstOrDefault(o => o.Status != "Завершено");
+        // Лише замовлення, призначене саме цьому водієві, і лише його автомобіль
+        var dbOrder = OrderService.GetActiveOrderForDriver(AuthService.CurrentUser?.EmployeeId);
 
-        if (dbOrder != null)
-        {
-            var points = new List<PointVM>();
-            foreach (var lp in dbOrder.LoadingPoints)
-                points.Add(new PointVM { IsLoading = true, Address = lp, ContactName = dbOrder.CustomerName, ContactPhone = dbOrder.CustomerPhone, OperationType = "Завантаження" });
-            foreach (var dp in dbOrder.DeliveryPoints)
-                points.Add(new PointVM { IsLoading = false, Address = dp, ContactName = dbOrder.CustomerName, ContactPhone = dbOrder.CustomerPhone, OperationType = "Доставка" });
-
-            currentOrder = new OrderVM
-            {
-                Id = dbOrder.Id,
-                CustomerCompany = dbOrder.CustomerCompany,
-                CustomerName = dbOrder.CustomerName,
-                CustomerPhone = dbOrder.CustomerPhone,
-                VehicleModel = "Призначений ТЗ",
-                VehiclePlate = dbOrder.AssignedVehiclePlate,
-                CargoName = dbOrder.CargoName,
-                WeightTons = dbOrder.WeightTons,
-                VolumeM3 = dbOrder.VolumeM3,
-                NeedsRefrigerator = dbOrder.RequiresRefrigerator,
-                TotalDistance = 35,
-                TotalTime = 70,
-                Status = dbOrder.Status,
-                CompletedPoints = 0,
-                Points = points
-            };
-        }
-        else
+        if (dbOrder == null)
         {
             currentOrder = null;
+            stages = new();
+            currentStageIndex = 0;
+            return;
         }
+
+        // Пункти беремо з БД: там зберігаються контакти та статус виконання кожного пункту
+        var dbPoints = OrderService.GetPointProgress(dbOrder.Id);
+
+        currentOrder = new OrderVM
+        {
+            Id = dbOrder.Id,
+            CustomerCompany = dbOrder.CustomerCompany,
+            CustomerName = dbOrder.CustomerName,
+            CustomerPhone = dbOrder.CustomerPhone,
+            VehicleModel = "Призначений ТЗ",
+            VehiclePlate = dbOrder.AssignedVehiclePlate,
+            CargoName = dbOrder.CargoName,
+            WeightTons = dbOrder.WeightTons,
+            VolumeM3 = dbOrder.VolumeM3,
+            NeedsRefrigerator = dbOrder.RequiresRefrigerator,
+            TotalDistance = 35,
+            TotalTime = 70,
+            Status = dbOrder.Status,
+            Points = dbPoints.Select(p => new PointVM
+            {
+                IsLoading = p.IsLoading,
+                Address = p.Address,
+                ContactName = p.ContactName,
+                ContactPhone = p.ContactPhone,
+                OperationType = p.IsLoading ? "Завантаження" : "Доставка"
+            }).ToList()
+        };
+
+        BuildStages(dbPoints);
     }
 
-    private void InitStages()
+    // Будує список етапів за збереженим станом пунктів, тому після перезавантаження сторінки прогрес не втрачається
+    private void BuildStages(List<TransportIn.Services.PointProgress> dbPoints)
     {
-        if (currentOrder == null) return;
+        stages = new();
+        var number = 1;
+        var completedPoints = 0;
 
-        stages = new()
+        for (int i = 0; i < dbPoints.Count; i++)
         {
-            new() { Number = 1, Label = "Прибув на пункт завантаження", ButtonLabel = "Підтвердити прибуття", State = "active" },
-            new() { Number = 2, Label = "Початок завантаження", ButtonLabel = "Почати завантаження", State = "pending" },
-            new() { Number = 3, Label = "Завершення завантаження", ButtonLabel = "Завершити завантаження", State = "pending" },
-            new() { Number = 4, Label = "Виїзд / в дорозі", ButtonLabel = "Підтвердити виїзд", State = "pending" },
-            new() { Number = 5, Label = "Прибув на пункт доставки", ButtonLabel = "Прибув на розвантаження", State = "pending" },
-            new() { Number = 6, Label = "Початок розвантаження", ButtonLabel = "Почати розвантаження", State = "pending" },
-            new() { Number = 7, Label = "Завершення розвантаження", ButtonLabel = "Завершити розвантаження", State = "pending" },
-            new() { Number = 8, Label = "Замовлення завершено", ButtonLabel = "Завершити замовлення", State = "pending" }
-        };
-        currentStageIndex = 0;
+            var point = dbPoints[i];
+            var pointStages = TransportIn.Services.PointWorkflow.GetStages(
+                point.IsLoading, hasNextPoint: i < dbPoints.Count - 1);
+            var next = TransportIn.Services.PointWorkflow.GetNextStageIndex(pointStages, point.Status);
+
+            if (next >= pointStages.Count)
+                completedPoints++;
+
+            for (int j = 0; j < pointStages.Count; j++)
+            {
+                var step = pointStages[j];
+                stages.Add(new StageVM
+                {
+                    Number = number++,
+                    Label = $"Пункт {i + 1}: {step.Label}",
+                    ButtonLabel = step.ButtonLabel,
+                    State = j < next ? "done" : "pending",
+                    Time = (j == 0 && point.ActualArrival.HasValue)
+                        ? point.ActualArrival.Value.ToLocalTime().ToString("HH:mm")
+                        : "",
+                    PointId = point.Id,
+                    TargetStatus = step.Status,
+                    IsDeparture = step.IsDeparture
+                });
+            }
+        }
+
+        stages.Add(new StageVM
+        {
+            Number = number,
+            Label = "Замовлення завершено",
+            ButtonLabel = "Завершити замовлення",
+            IsFinal = true
+        });
+
+        if (currentOrder != null)
+            currentOrder.CompletedPoints = completedPoints;
+
+        currentStageIndex = stages.FindIndex(s => s.State != "done");
+        if (currentStageIndex < 0)
+            currentStageIndex = stages.Count;
+        else
+            stages[currentStageIndex].State = "active";
     }
 
     private void CheckThreatBlock()
@@ -406,32 +478,23 @@
 
     private void ConfirmStage()
     {
-        if (currentOrder == null || currentStageIndex >= stages.Count || isBlockedByThreat) return;
+        if (currentOrder == null || currentStageIndex >= stages.Count || IsCurrentStageBlocked)
+            return;
 
-        stages[currentStageIndex].State = "done";
-        stages[currentStageIndex].Time = DateTime.Now.ToString("HH:mm");
+        var stage = stages[currentStageIndex];
 
-        var label = stages[currentStageIndex].Label.ToLower();
-        if (label.Contains("завершення завантаження") || label.Contains("завершення розвантаження"))
-        {
-            currentOrder.CompletedPoints++;
-        }
+        // Під час призупинення кроки по пунктах заблоковані, але завершити виконане замовлення можна
+        if (IsSuspended && !stage.IsFinal)
+            return;
 
-        // Синхронізація статусу з OrderService (БД)
-        var dbOrder = OrderService.GetAllOrders().FirstOrDefault(o => o.Id == currentOrder.Id);
-
-        currentStageIndex++;
-        if (currentStageIndex < stages.Count)
-        {
-            stages[currentStageIndex].State = "active";
-            currentOrder.Status = "В дорозі";
-            if (dbOrder != null) dbOrder.Status = "В дорозі";
-        }
+        // Зберігаємо крок у БД; сервіс перевіряє, що він допустимий
+        if (stage.IsFinal)
+            OrderService.CompleteOrder(currentOrder.Id);
         else
-        {
-            currentOrder.Status = "Завершено";
-            if (dbOrder != null) dbOrder.Status = "Завершено";
-        }
+            OrderService.SetPointStatus(stage.PointId, stage.TargetStatus);
+
+        // Перечитуємо стан із БД: на екрані завжди те, що збережено
+        LoadCurrentOrder();
         StateHasChanged();
     }
 
@@ -486,6 +549,8 @@
 
     private string DriverStatusClass(string s) => s switch
     {
+        "Нове" => "new",
+        "В роботі" => "in-progress",
         "Призначено" => "new",
         "В дорозі" => "in-progress",
         "Призупинено" => "suspended",

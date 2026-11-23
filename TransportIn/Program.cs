@@ -18,9 +18,9 @@ builder.Services.AddRazorComponents()
 builder.Services.AddScoped<TransportIn.Services.AuthService>();
 builder.Services.AddSingleton<TransportIn.Services.EmergencyService>();
 builder.Services.AddScoped<TransportIn.Services.FleetService>();
-builder.Services.AddScoped<TransportIn.Services.OrderService>();
+builder.Services.AddSingleton<TransportIn.Services.OrderService>();
 builder.Services.AddScoped<TransportIn.Services.ExpertRulesService>();
-builder.Services.AddScoped<EmployeeService>();
+builder.Services.AddSingleton<EmployeeService>();
 builder.Services.AddScoped<RoadEventService>();
 var app = builder.Build();
 using (var scope = app.Services.CreateScope())

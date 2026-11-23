@@ -23,7 +23,7 @@
                 <label class="form-label-modern">Логін</label>
                 <div class="input-group-modern">
                     <i class="bi bi-person"></i>
-                    <input type="text" @bind="username" placeholder="admin, manager або driver" autocomplete="username" />
+                    <input type="text" @bind="username" placeholder="Ваш логін" autocomplete="username" />
                 </div>
             </div>
 
@@ -40,11 +40,6 @@
             </button>
         </div>
 
-        <div class="login-hint">
-            <i class="bi bi-info-circle me-1"></i>
-            Швидкий вхід для тесту:<br>
-            <b>admin</b> / 123 &nbsp;|&nbsp; <b>manager</b> / 123 &nbsp;|&nbsp; <b>driver</b> / 123
-        </div>
     </div>
 </div>
 
@@ -55,39 +50,24 @@
 
     private void HandleLogin()
     {
-        Console.WriteLine("КНОПКА ВХОДА НАЖАТА");
-
-        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
-        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+        if (!AuthService.TryLogin(username, password, out var error))
         {
-            errorMessage = "Будь ласка, заповніть всі поля для входу!";
+            errorMessage = error;
             return;
         }
 
-        var user = AuthService.Login(username, password);
-        Console.WriteLine($"ВВЕДЁН ЛОГИН: {username}");
-        Console.WriteLine($"ПОЛЬЗОВАТЕЛЬ НАЙДЕН: {user != null}");
-        Console.WriteLine($"ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ: {AuthService.CurrentUser?.Username}");
-        if (user == null)
+        errorMessage = "";
+        switch (AuthService.CurrentUser!.Role)
         {
-            errorMessage = "Невірний логін або пароль!";
-        }
-        else
-        {
-            errorMessage = "";
-            switch (user.Role)
-            {
-                case TransportIn.Models.UserRole.Admin:
-                    Navigation.NavigateTo("/admin-dashboard");
-                    break;
-                case TransportIn.Models.UserRole.Manager:
-                    Console.WriteLine("ПЕРЕХОД НА /manager-dashboard");
-                    Navigation.NavigateTo("/manager-dashboard");
-                    break;
-                case TransportIn.Models.UserRole.Driver:
-                    Navigation.NavigateTo("/driver-dashboard");
-                    break;
-            }
+            case TransportIn.Models.UserRole.Admin:
+                Navigation.NavigateTo("/admin-dashboard");
+                break;
+            case TransportIn.Models.UserRole.Manager:
+                Navigation.NavigateTo("/manager-dashboard");
+                break;
+            case TransportIn.Models.UserRole.Driver:
+                Navigation.NavigateTo("/driver-dashboard");
+                break;
         }
     }
 }

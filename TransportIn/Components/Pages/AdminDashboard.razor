@@ -961,7 +961,10 @@
                         Phone = phone,
                         LicenseCategory = newEmp.LicenseCategory?.Trim() ?? "",
                         MedicalCertExpiry = newEmp.MedExpiry.Trim(),
-                        IsActive = true
+                    IsActive = true,
+                    Login = newEmp.Login.Trim(),
+                    Password = newEmp.Password,
+                    Email = newEmp.Email.Trim()
                     });
                 SetFlash($"Працівника «{fullName}» додано.");
             }

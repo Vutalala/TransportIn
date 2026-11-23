@@ -1,48 +1,95 @@
-﻿using TransportIn.Models;
+﻿using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using TransportIn.Data;
+using TransportIn.Models;
 
 namespace TransportIn.Services
 {
+    // Авторизація: перевірка логіна й пароля за таблицею Users, визначення ролі та працівника
     public class AuthService
     {
-        // Початкові тестові користувачі для перевірки
-        private readonly List<User> _users = new()
+        private readonly IDbContextFactory<AppDbContext> _contextFactory;
+
+        public AuthService(IDbContextFactory<AppDbContext> contextFactory)
         {
-            new User { Id = 1, Username = "admin", Password = "123", Role = UserRole.Admin, FullName = "Головний Адмін", Phone = "+380000000001" },
-            new User { Id = 2, Username = "manager", Password = "123", Role = UserRole.Manager, FullName = "Менеджер Складу", Phone = "+380000000002" },
-            new User { Id = 3, Username = "driver", Password = "123", Role = UserRole.Driver, FullName = "Водій Рефрижератора", Phone = "+380000000003" }
-        };
+            _contextFactory = contextFactory;
+        }
 
         public User? CurrentUser { get; private set; }
 
-        public User? Login(string username, string password)
+        // Повертає true при успішному вході; інакше в error — текст помилки для користувача
+        public bool TryLogin(string? username, string? password, out string error)
         {
-            var user = _users.FirstOrDefault(u => u.Username == username && u.Password == password);
-            if (user != null)
+            error = "";
+
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
             {
-                CurrentUser = user;
+                error = "Будь ласка, заповніть всі поля для входу!";
+                return false;
             }
-            return user;
+
+            DbSeeder.EnsureSeeded(_contextFactory);
+
+            using var db = _contextFactory.CreateDbContext();
+
+            var login = username.Trim();
+            var entity = db.Users
+                .AsNoTracking()
+                .Include(u => u.RoleNavigation)
+                .Include(u => u.EmployeeNavigation)
+                .FirstOrDefault(u => u.Username == login);
+
+            if (entity == null)
+            {
+                error = "Користувача з таким логіном не знайдено.";
+                return false;
+            }
+
+            if (!PasswordHasher.Verify(password, entity.PasswordHash))
+            {
+                error = "Неправильний пароль.";
+                return false;
+            }
+
+            if (entity.EmployeeNavigation is { IsActive: false })
+            {
+                error = "Обліковий запис заблоковано або деактивовано.";
+                return false;
+            }
+
+            var role = MapRole(entity.RoleNavigation.Name);
+            if (role == null)
+            {
+                error = "Для облікового запису не визначено роль.";
+                return false;
+            }
+
+            CurrentUser = new User
+            {
+                Id = entity.Id,
+                Username = entity.Username,
+                Role = role.Value,
+                FullName = entity.FullName,
+                Phone = entity.Phone,
+                EmployeeId = entity.EmployeeId
+            };
+            return true;
         }
+
+        public User? Login(string username, string password) =>
+            TryLogin(username, password, out _) ? CurrentUser : null;
 
         public void Logout()
         {
             CurrentUser = null;
         }
 
-        public void RegisterUser(string username, string password, UserRole role, string fullName, string phone)
+        private static UserRole? MapRole(string roleName) => roleName switch
         {
-            var newUser = new User
-            {
-                Id = _users.Count + 1,
-                Username = username,
-                Password = password,
-                Role = role,
-                FullName = fullName,
-                Phone = phone
-            };
-            _users.Add(newUser);
-        }
-
-        public List<User> GetAllUsers() => _users;
+            "Адміністратор" => UserRole.Admin,
+            "Менеджер" => UserRole.Manager,
+            "Водій" => UserRole.Driver,
+            _ => null
+        };
     }
 }
