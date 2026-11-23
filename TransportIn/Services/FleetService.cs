@@ -1,5 +1,4 @@
-﻿
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -19,6 +18,10 @@ namespace TransportIn.Services
         }
 
         public event Action? OnChange;
+
+        // Допустимі технічні стани транспорту. Лише «Справний» дозволяє призначати авто на замовлення.
+        public const string OperationalStatus = "Справний";
+        public static readonly string[] VehicleStatuses = { OperationalStatus, "У ремонті", "Несправний" };
 
         public List<Vehicle> GetAllVehicles()
         {
@@ -83,7 +86,9 @@ namespace TransportIn.Services
                 VolumeM3 = vehicle.VolumeM3,
                 HasRefrigerator = vehicle.HasRefrigerator,
                 AssignedDriver = vehicle.AssignedDriver,
-                Status = vehicle.Status,
+                Status = string.IsNullOrWhiteSpace(vehicle.Status) || vehicle.Status == "На складі"
+                    ? OperationalStatus
+                    : vehicle.Status,
                 Lat = vehicle.Lat,
                 Lng = vehicle.Lng
             };
@@ -94,6 +99,34 @@ namespace TransportIn.Services
             vehicle.Id = dbVehicle.Id;
 
             NotifyStateChanged();
+        }
+
+        // Змінює технічний стан авто. Повертає номери активних замовлень, на які авто призначене
+        // (адміністратор бачить попередження, але призначення автоматично не скасовуються).
+        public List<int> SetVehicleStatus(int id, string status)
+        {
+            if (!VehicleStatuses.Contains(status))
+                throw new ArgumentException("Невідомий технічний стан транспорту.");
+
+            using var context = _contextFactory.CreateDbContext();
+
+            var vehicle = context.Vehicles.FirstOrDefault(v => v.Id == id);
+            if (vehicle == null)
+                throw new InvalidOperationException("ТЗ не знайдено.");
+
+            vehicle.Status = status;
+            context.SaveChanges();
+
+            var plate = vehicle.LicensePlate;
+            var activeOrders = context.Orders
+                .AsNoTracking()
+                .Where(o => (o.Status == "В роботі" || o.Status == "Призупинено")
+                            && o.AssignedVehiclePlate.Contains(plate))
+                .Select(o => o.Id)
+                .ToList();
+
+            NotifyStateChanged();
+            return activeOrders;
         }
 
         public void DeleteVehicle(int id)

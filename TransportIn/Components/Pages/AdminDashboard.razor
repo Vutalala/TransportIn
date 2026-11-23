@@ -295,7 +295,7 @@
                     {
                         <div class="table-responsive">
                             <table class="modern-table">
-                                <thead><tr><th>ID</th><th>Модель</th><th>Номер</th><th>Тип</th><th>Вантаж.</th><th>Об'єм</th><th>Водій</th><th>VIN</th><th>Дії</th></tr></thead>
+                                <thead><tr><th>ID</th><th>Модель</th><th>Номер</th><th>Тип</th><th>Вантаж.</th><th>Об'єм</th><th>Стан</th><th>Водій</th><th>VIN</th><th>Дії</th></tr></thead>
                                 <tbody>
                                     @foreach (var veh in allVehicles.ToList())
                                     {
@@ -306,6 +306,19 @@
                                             <td><span class="badge-modern badge-primary">@veh.BodyType</span></td>
                                             <td>@veh.CapacityTons т</td>
                                             <td>@veh.VolumeM3 м³</td>
+                                            <td>
+                                                <select class="dark-input" style="min-width:150px;@(veh.Status == TransportIn.Services.FleetService.OperationalStatus ? "" : "border-color:#f87171;color:#f87171")"
+                                                        value="@veh.Status" @onchange="e => ChangeVehicleStatus(veh, e.Value?.ToString())">
+                                                    @foreach (var st in TransportIn.Services.FleetService.VehicleStatuses)
+                                                    {
+                                                        <option value="@st">@st</option>
+                                                    }
+                                                    @if (!TransportIn.Services.FleetService.VehicleStatuses.Contains(veh.Status))
+                                                    {
+                                                        <option value="@veh.Status">@veh.Status</option>
+                                                    }
+                                                </select>
+                                            </td>
                                             <td>@(string.IsNullOrEmpty(veh.AssignedDriver) ? "—" : veh.AssignedDriver)</td>
                                             <td>
                                                 <span class="doc-status @(string.IsNullOrEmpty(veh.VinCode) ? "warning" : "ok")">
@@ -732,7 +745,21 @@
         catch (Exception ex) { SetFlash("Не вдалося видалити: " + ex.Message, true); }
         CancelDelete();
     }
+    private void ChangeVehicleStatus(TransportIn.Models.Vehicle veh, string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status) || status == veh.Status) return;
 
+        try
+        {
+            var activeOrders = FleetService.SetVehicleStatus(veh.Id, status);
+
+            if (status != TransportIn.Services.FleetService.OperationalStatus && activeOrders.Count > 0)
+                SetFlash($"Стан «{veh.LicensePlate}»: {status}. Увага: авто призначене на активні замовлення №{string.Join(", №", activeOrders)}.", true);
+            else
+                SetFlash($"Стан «{veh.LicensePlate}» змінено на «{status}».");
+        }
+        catch (Exception ex) { SetFlash("Не вдалося змінити стан: " + ex.Message, true); }
+    }
     private void DeleteVehicle(int id)
     {
         FleetService.DeleteVehicle(id);

@@ -60,6 +60,50 @@ namespace TransportIn.Services
             }).ToList();
         }
 
+        // Технічний стан: автомобіль придатний до рейсу, лише якщо його статус «Справний».
+        public static bool IsOperational(string? status) =>
+            string.IsNullOrWhiteSpace(status) ||
+            status.Trim().Equals("Справний", StringComparison.OrdinalIgnoreCase);
+
+        // Автомобілі, які не можна призначити на замовлення orderId: номер -> причина.
+        // Причини: несправність або зайнятість іншим активним замовленням («В роботі», «Призупинено»).
+        // Замовлення orderId не рахується, тому його власні авто не блокуються.
+        private static Dictionary<string, string> FindUnavailable(AppDbContext db, int orderId)
+        {
+            var result = new Dictionary<string, string>();
+
+            var vehicles = db.Vehicles.AsNoTracking()
+                .Select(v => new { v.LicensePlate, v.Status })
+                .ToList();
+            foreach (var v in vehicles)
+            {
+                if (!IsOperational(v.Status))
+                    result[v.LicensePlate] = $"Несправний ({v.Status})";
+            }
+
+            var active = db.Orders.AsNoTracking()
+                .Where(o => o.Id != orderId && (o.Status == "В роботі" || o.Status == "Призупинено"))
+                .Select(o => new { o.Id, o.AssignedVehiclePlate })
+                .ToList();
+            foreach (var o in active)
+            {
+                foreach (var plate in SplitPlates(o.AssignedVehiclePlate))
+                {
+                    if (!result.ContainsKey(plate))
+                        result[plate] = $"Зайнятий: замовлення №{o.Id}";
+                }
+            }
+
+            return result;
+        }
+
+        // Для інтерфейсу менеджера: які авто недоступні для цього замовлення і чому
+        public Dictionary<string, string> GetVehicleUnavailability(int orderId)
+        {
+            using var db = _contextFactory.CreateDbContext();
+            return FindUnavailable(db, orderId);
+        }
+
         // Перевіряє, чи обраних автомобілів разом вистачає для замовлення.
         // Повертає текст помилки або null.
         private static string? CheckCoverage(
@@ -161,6 +205,13 @@ namespace TransportIn.Services
             var vehicles = db.Vehicles.Where(v => plates.Contains(v.LicensePlate)).ToList();
             if (vehicles.Count != plates.Count)
                 return "Частину обраних автомобілів не знайдено в автопарку.";
+
+            // Технічна справність і зайнятість: перевіряємо і на сервері, щоб не обійти через інтерфейс
+            var unavailable = FindUnavailable(db, orderId);
+            var blocked = plates.Where(unavailable.ContainsKey).ToList();
+            if (blocked.Count > 0)
+                return "Не можна призначити: " +
+                       string.Join("; ", blocked.Select(p => $"{p} — {unavailable[p]}")) + ".";
 
             var error = CheckCoverage(order, vehicles);
             if (error != null)

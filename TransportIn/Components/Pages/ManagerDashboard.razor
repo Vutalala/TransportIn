@@ -308,6 +308,7 @@
                                     var showAll = showAllVehicles || suitable.Count == 0;
                                     var allVehicles = FleetService.GetAllVehicles();
                                     var candidates = showAll ? allVehicles : suitable;
+                                    var vehBlocked = OrderService.GetVehicleUnavailability(selectedOrder.Id);
                                     var chosen = allVehicles.Where(v => selectedPlates.Contains(v.LicensePlate)).ToList();
                                     var coverageError = chosen.Count == 0 ? null : CoverageError(selectedOrder, chosen);
                                 }
@@ -335,17 +336,19 @@
 
                                 <div class="table-responsive">
                                     <table class="modern-table">
-                                        <thead><tr><th></th><th>Модель</th><th>Номер</th><th>Вантаж.</th><th>Об'єм</th><th>Реф.</th></tr></thead>
+                                        <thead><tr><th></th><th>Модель</th><th>Номер</th><th>Вантаж.</th><th>Об'єм</th><th>Реф.</th><th>Стан</th></tr></thead>
                                         <tbody>
                                             @foreach (var v in candidates)
                                             {
-                                                <tr class="match-table-row @(selectedPlates.Contains(v.LicensePlate) ? "selected" : "")" @onclick="() => TogglePlate(v.LicensePlate)">
-                                                    <td><input type="checkbox" checked="@selectedPlates.Contains(v.LicensePlate)" @onclick="() => TogglePlate(v.LicensePlate)" @onclick:stopPropagation="true" /></td>
+                                                var vehReason = vehBlocked.TryGetValue(v.LicensePlate, out var vehWhy) ? vehWhy : null;
+                                                <tr class="match-table-row @(selectedPlates.Contains(v.LicensePlate) ? "selected" : "")" style="@(vehReason != null ? "opacity:.5;cursor:not-allowed" : "")" @onclick="() => TogglePlate(v.LicensePlate, vehReason != null)">
+                                                    <td><input type="checkbox" disabled="@(vehReason != null)" checked="@selectedPlates.Contains(v.LicensePlate)" @onclick="() => TogglePlate(v.LicensePlate, vehReason != null)" @onclick:stopPropagation="true" /></td>
                                                     <td><strong>@v.BrandModel</strong></td>
                                                     <td><span class="code-text">@v.LicensePlate</span></td>
                                                     <td>@v.CapacityTons т</td>
                                                     <td>@v.VolumeM3 м³</td>
                                                     <td>@(v.HasRefrigerator ? "✅" : "—")</td>
+                                                    <td style="color:@(vehReason != null ? "#f87171" : "#34d399")">@(vehReason ?? "Вільний")</td>
                                                 </tr>
                                             }
                                         </tbody>
@@ -750,8 +753,14 @@
         matchWarning = ""; confirmPlate = "";
     }
 
-    private void TogglePlate(string plate)
+    private void TogglePlate(string plate, bool isBlocked = false)
     {
+        if (isBlocked)
+        {
+            matchWarning = "Цей автомобіль зараз недоступний: він несправний або виконує інше замовлення.";
+            return;
+        }
+
         if (!selectedPlates.Remove(plate))
             selectedPlates.Add(plate);
         matchWarning = ""; confirmPlate = "";
@@ -803,21 +812,6 @@
 
         var orderId = selectedOrder.Id;
         var plates = selectedPlates.ToList();
-
-        var busyPlates = orders
-            .Where(x => x.Id != orderId && (x.Status == "В роботі" || x.Status == "Призупинено"))
-            .SelectMany(x => x.Vehicles.Select(v => v.Plate))
-            .Where(p => plates.Contains(p))
-            .Distinct()
-            .ToList();
-
-        var key = string.Join(";", plates.OrderBy(p => p));
-        if (busyPlates.Count > 0 && confirmPlate != key)
-        {
-            matchWarning = $"Увага! Транспорт {string.Join(", ", busyPlates)} вже призначений на інше активне замовлення. Натисніть «Призначити» ще раз, щоб призначити все одно.";
-            confirmPlate = key;
-            return;
-        }
 
         var error = OrderService.AssignVehiclesToOrder(orderId, plates);
         if (error != null)
