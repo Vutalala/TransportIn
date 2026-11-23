@@ -12,6 +12,7 @@
     public class User
     {
         public int Id { get; set; }
+        public int? EmployeeId { get; set; }
         public string Username { get; set; } = string.Empty;
         public string Password { get; set; } = string.Empty; // Для університетського проєкту поки що простий текст
         public UserRole Role { get; set; }
