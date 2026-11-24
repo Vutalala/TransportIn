@@ -19,6 +19,8 @@ builder.Services.AddScoped<TransportIn.Services.AuthService>();
 builder.Services.AddSingleton<TransportIn.Services.EmergencyService>();
 builder.Services.AddSingleton<TransportIn.Services.FleetService>();
 builder.Services.AddSingleton<TransportIn.Services.OrderService>();
+builder.Services.AddSingleton<TransportIn.Services.DriverReportService>();
+builder.Services.AddSingleton<TransportIn.Services.HistoryService>();
 builder.Services.AddScoped<TransportIn.Services.ExpertRulesService>();
 builder.Services.AddSingleton<EmployeeService>();
 builder.Services.AddScoped<RoadEventService>();

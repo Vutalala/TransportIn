@@ -4,6 +4,8 @@
 @inject TransportIn.Services.AuthService AuthService
 @inject TransportIn.Services.EmergencyService EmergencyService
 @inject TransportIn.Services.OrderService OrderService
+@inject TransportIn.Services.DriverReportService ReportService
+@inject IJSRuntime JS
 @implements IDisposable
 @inject NavigationManager Navigation
 
@@ -58,7 +60,30 @@
                     <div class="threat-body">@GetThreatAdvice()</div>
                 </div>
             }
-
+            <!-- ВІДПОВІДІ ДИСПЕТЧЕРА -->
+            @if (replies.Count > 0)
+            {
+                <div class="modern-card">
+                    <div class="card-header-custom">
+                        <h5><span class="header-icon blue"><i class="bi bi-chat-left-text"></i></span> Відповіді диспетчера</h5>
+                        <span class="badge-count">@replies.Count(r => !r.IsRead) нових</span>
+                    </div>
+                    <div class="card-body-custom">
+                        @foreach (var r in replies)
+                        {
+                            <div class="mb-2 p-2" style="background:@(r.IsRead ? "rgba(255,255,255,.03)" : "rgba(59,130,246,.12)");border-radius:6px;font-size:.88rem">
+                                <div style="font-weight:600;color:var(--text-primary)">@r.Title</div>
+                                <div style="font-size:.75rem;color:var(--text-secondary)">@r.CreatedAt.ToLocalTime().ToString("dd.MM HH:mm")</div>
+                                <div class="mt-1">@r.Text</div>
+                                @if (!r.IsRead)
+                                {
+                                    <button class="btn-action mt-2" @onclick="() => ReportService.MarkReplyRead(r.Id)"><i class="bi bi-check-circle"></i> Прочитано</button>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
             @if (currentOrder == null)
             {
                 <!-- Порожній стан: немає призначених замовлень -->
@@ -109,7 +134,7 @@
                                     <div class="detail-block">
                                         <div class="detail-block-title"><i class="bi bi-geo-alt"></i> Маршрут</div>
                                         <div class="detail-block-value">@currentOrder.Points.Count точок</div>
-                                        <div class="detail-block-sub">Загальна відстань: ~@currentOrder.TotalDistance км · Час: ~@currentOrder.TotalTime хв</div>
+                                        <div class="detail-block-sub">@RouteSummary()</div>
                                     </div>
                                 </div>
 
@@ -232,13 +257,13 @@
                                 <h5><span class="header-icon blue"><i class="bi bi-map"></i></span> Мій маршрут</h5>
                             </div>
                             <div class="card-body-custom p-0">
-                                <div class="map-placeholder-sm">
-                                    <div class="placeholder-content">
-                                        <i class="bi bi-map-fill"></i>
-                                        <h5>Карта маршруту</h5>
-                                        <p>Тут буде інтерактивна карта з вашим маршрутом та поточним положенням ТЗ</p>
+                                <div @ref="mapEl" style="height:340px;width:100%"></div>
+                                @if (!string.IsNullOrEmpty(mapMessage))
+                                {
+                                    <div class="p-2" style="background:rgba(245,158,11,.1);border-top:1px solid rgba(245,158,11,.3);color:#fbbf24;font-size:.82rem">
+                                        <i class="bi bi-exclamation-triangle-fill me-1"></i> @mapMessage
                                     </div>
-                                </div>
+                                }
                             </div>
                         </div>
 
@@ -303,7 +328,19 @@
     private string problemBody = "";
     private bool problemSent = false;
     private Dictionary<string, string> problemErrors = new();
+    private List<TransportIn.Services.DriverReplyItem> replies = new();
 
+    private void LoadReplies()
+    {
+        var id = AuthService.CurrentUser?.EmployeeId;
+        replies = id.HasValue ? ReportService.GetRepliesForDriver(id.Value) : new();
+    }
+
+    private void OnReportChanged() => InvokeAsync(() =>
+    {
+        LoadReplies();
+        StateHasChanged();
+    });
     private class OrderVM
     {
         public int Id; public string CustomerCompany = ""; public string CustomerName = ""; public string CustomerPhone = "";
@@ -339,6 +376,8 @@
         EmergencyService.OnChange += OnEmergencyChanged;
         OrderService.OnChange += OnOrderChanged;
         CheckThreatBlock();
+        ReportService.OnChange += OnReportChanged;
+        LoadReplies();
         LoadCurrentOrder();
     }
 
@@ -390,14 +429,12 @@
             CustomerCompany = dbOrder.CustomerCompany,
             CustomerName = dbOrder.CustomerName,
             CustomerPhone = dbOrder.CustomerPhone,
-            VehicleModel = "Призначений ТЗ",
+            VehicleModel = OrderService.GetVehicleModel(dbOrder.AssignedVehiclePlate),
             VehiclePlate = dbOrder.AssignedVehiclePlate,
             CargoName = dbOrder.CargoName,
             WeightTons = dbOrder.WeightTons,
             VolumeM3 = dbOrder.VolumeM3,
             NeedsRefrigerator = dbOrder.RequiresRefrigerator,
-            TotalDistance = 35,
-            TotalTime = 70,
             Status = dbOrder.Status,
             Points = dbPoints.Select(p => new PointVM
             {
@@ -410,6 +447,7 @@
         };
 
         BuildStages(dbPoints);
+        mapDirty = true;
     }
 
     // Будує список етапів за збереженим станом пунктів, тому після перезавантаження сторінки прогрес не втрачається
@@ -468,12 +506,7 @@
 
     private void CheckThreatBlock()
     {
-        isBlockedByThreat = EmergencyService.CurrentEmergency switch
-        {
-            "Повітряна тривога" => true,
-            "Перекриття мостів" => true,
-            _ => false
-        };
+        isBlockedByThreat = TransportIn.Services.PointWorkflow.IsDepartureBlocked(EmergencyService.CurrentEmergency);
     }
 
     private void ConfirmStage()
@@ -506,6 +539,14 @@
 
         if (problemErrors.Count > 0) { StateHasChanged(); return; }
 
+        var driverId = AuthService.CurrentUser?.EmployeeId;
+        if (driverId == null || !ReportService.Send(driverId.Value, currentOrder?.Id, problemCategory, problemSubject, problemBody))
+        {
+            problemErrors["Body"] = "Не вдалося надіслати повідомлення. Спробуйте ще раз.";
+            StateHasChanged();
+            return;
+        }
+
         problemSent = true;
         problemSubject = "";
         problemBody = "";
@@ -526,14 +567,16 @@
 
     private string GetThreatClass() => EmergencyService.CurrentEmergency switch
     {
-        "Повітряна тривога" => "danger",
-        "Ожеледиця" or "Перекриття мостів" => "",
+        "Повітряна тривога" or "Ураган" => "danger",
+        "Ожеледиця" or "Перекриття мостів" or "Снігопад" => "",
         _ => "calm"
     };
 
     private string GetThreatIcon() => EmergencyService.CurrentEmergency switch
     {
         "Повітряна тривога" => "bi-exclamation-triangle-fill",
+        "Ураган" => "bi-tornado",
+        "Снігопад" => "bi-cloud-snow-fill",
         "Ожеледиця" => "bi-snow2",
         "Перекриття мостів" => "bi-sign-stop-fill",
         _ => "bi-info-circle-fill"
@@ -542,11 +585,12 @@
     private string GetThreatAdvice() => EmergencyService.CurrentEmergency switch
     {
         "Повітряна тривога" => "Згідно з протоколом безпеки: якщо ви на пункті — залишайтеся та очікуйте. Якщо в дорозі — рухайтеся до найближчого безпечного місця очікування.",
+        "Ураган" => "Сильний вітер (понад 25 м/с). Виїзд заборонено. Якщо ви в дорозі — негайно зупиніться в безпечному місці та очікуйте вказівок диспетчера.",
+        "Снігопад" => "Сильний снігопад. Виїзд заборонено до розчищення основних доріг. Якщо трасу заносить — знайдіть безпечне місце для зупинки.",
         "Ожеледиця" => "Зменшіть швидкість на 30-50%. Увімкніть протитуманні фари. Збільште дистанцію.",
         "Перекриття мостів" => "Увага! Всі мостові переходи перекриті. Побудова маршруту через річку неможлива. Очікуйте відновлення руху.",
         _ => "Дотримуйтесь інструкцій диспетчера."
     };
-
     private string DriverStatusClass(string s) => s switch
     {
         "Нове" => "new",
@@ -574,9 +618,148 @@
         _ => "/"
     };
 
+    // ===== Карта маршруту водія =====
+    private ElementReference mapEl;
+    private IJSObjectReference? mapModule;
+    private bool mapReady, mapDirty = true, mapBusy;
+    private int? mapOrderId;
+    private bool routeKnown, routeApprox;
+    private double routeKm, routeMin;
+    private string mapMessage = "";
+
+    private class MapResult
+    {
+        public List<GeoPoint> Geocoded { get; set; } = new();
+        public List<string> Missing { get; set; } = new();
+        public double Km { get; set; }
+        public double Min { get; set; }
+        public bool Approx { get; set; }
+        public bool HasRoute { get; set; }
+    }
+
+    private class GeoPoint
+    {
+        public int Id { get; set; }
+        public double Lat { get; set; }
+        public double Lng { get; set; }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Немає замовлення: блок карти не відображається, наступного разу карту треба створити заново
+        if (currentOrder == null)
+        {
+            mapReady = false;
+            mapOrderId = null;
+            return;
+        }
+
+        if (mapBusy || (mapReady && mapOrderId == currentOrder.Id && !mapDirty))
+            return;
+
+        mapBusy = true;
+        try
+        {
+            mapModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/driverMap.js");
+
+            if (!mapReady || mapOrderId != currentOrder.Id)
+            {
+                await mapModule.InvokeVoidAsync("init", mapEl);
+                mapReady = true;
+                mapOrderId = currentOrder.Id;
+                routeKnown = false;
+            }
+
+            mapDirty = false;
+            await DrawRouteAsync();
+        }
+        catch (JSDisconnectedException) { }
+        catch (Exception ex)
+        {
+            mapDirty = false;
+            mapMessage = "Карту не вдалося завантажити: " + ex.Message;
+            StateHasChanged();
+        }
+        finally
+        {
+            mapBusy = false;
+        }
+
+        // Стан змінився, поки малювався маршрут
+        if (mapDirty)
+            StateHasChanged();
+    }
+
+    // Малює пункти замовлення й маршрут, зберігає знайдені координати та оновлює відстань і час
+    private async Task DrawRouteAsync()
+    {
+        if (mapModule == null || currentOrder == null)
+            return;
+
+        var points = OrderService.GetRoutePoints(currentOrder.Id)
+            .Select(p => new { id = p.Id, seq = p.Seq, isLoading = p.IsLoading, address = p.Address, status = p.Status, lat = p.Lat, lng = p.Lng })
+            .ToList();
+
+        var result = await mapModule.InvokeAsync<MapResult?>("showRoute", points, currentOrder.CompletedPoints);
+        if (result == null)
+            return;
+
+        foreach (var g in result.Geocoded)
+            OrderService.SavePointCoordinates(g.Id, g.Lat, g.Lng);
+
+        routeKnown = result.HasRoute;
+        routeApprox = result.Approx;
+        routeKm = result.Km;
+        routeMin = result.Min;
+        mapMessage = result.Missing.Count > 0
+            ? "Не знайдено на карті: " + string.Join("; ", result.Missing)
+            : "";
+
+        StateHasChanged();
+    }
+
+    // Орієнтовний час: не швидше за міську межу 50 км/год (ТЗ); при ожеледиці швидкість менша на 40%
+    private int RouteMinutes()
+    {
+        var minutes = Math.Max(routeMin, routeKm / 50d * 60d);
+        if (EmergencyService.CurrentEmergency == "Ожеледиця")
+            minutes /= 0.6;
+        return (int)Math.Round(minutes);
+    }
+
+    private string RouteSummary()
+    {
+        if (!routeKnown)
+            return string.IsNullOrEmpty(mapMessage) ? "Розрахунок маршруту…" : "Маршрут не розраховано";
+
+        var text = $"Відстань: ~{routeKm:0.#} км · Час: ~{RouteMinutes()} хв";
+        if (routeApprox)
+            text += " (орієнтовно, за прямими лініями)";
+        if (EmergencyService.CurrentEmergency == "Ожеледиця")
+            text += " · ожеледиця: швидкість зменшено на 40%";
+        return text;
+    }
+
+    private static async Task DisposeMapAsync(IJSObjectReference module)
+    {
+        try
+        {
+            await module.InvokeVoidAsync("dispose");
+            await module.DisposeAsync();
+        }
+        catch { }
+    }
+
     public void Dispose()
     {
+        if (mapModule != null)
+        {
+            var module = mapModule;
+            mapModule = null;
+            _ = DisposeMapAsync(module);
+        }
         EmergencyService.OnChange -= OnEmergencyChanged;
         OrderService.OnChange -= OnOrderChanged;
+        ReportService.OnChange -= OnReportChanged;
     }
 }

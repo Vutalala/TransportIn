@@ -9,6 +9,7 @@
 @inject TransportIn.Services.FleetService FleetService
 @inject TransportIn.Services.ExpertRulesService ExpertRulesService
 @inject TransportIn.Services.EmployeeService EmployeeService
+@inject TransportIn.Services.DriverReportService ReportService
 @inject NavigationManager Navigation
 
 @implements IDisposable
@@ -75,7 +76,79 @@
                 <div class="stat-card"><div class="stat-icon amber"><i class="bi bi-shield-check"></i></div><div><div class="stat-value">@ExpertRulesService.GetAllRules().Count</div><div class="stat-label">Правил безпеки</div></div></div>
                 <div class="stat-card"><div class="stat-icon @(GetEmergencyIconColor())"><i class="bi @(GetEmergencyIcon())"></i></div><div><div class="stat-value">@GetEmergencyLevel()</div><div class="stat-label">Рівень загрози</div></div></div>
             </div>
+            <!-- ПОВІДОМЛЕННЯ ВОДІЇВ (ДТП / дорога) -->
+            <div class="modern-card">
+                <div class="card-header-custom">
+                    <h5><span class="header-icon" style="background:rgba(239,68,68,.15);color:#f87171"><i class="bi bi-envelope-paper"></i></span> Повідомлення від водіїв: ДТП / дорога</h5>
+                    <span class="badge-count">@driverMessages.Count(m => !m.IsRead) нових</span>
+                </div>
+                <div class="card-body-custom">
+                    @if (driverMessages.Count == 0)
+                    {
+                        <div class="text-center py-4" style="color:var(--text-secondary)">
+                            <i class="bi bi-envelope" style="font-size:2rem;opacity:.4"></i>
+                            <p class="mb-0 mt-2">Немає повідомлень</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="inbox-list" style="max-height:300px">
+                            @foreach (var m in driverMessages)
+                            {
+                                <div class="msg-row @(m.IsRead ? "" : "unread")" @onclick="() => OpenDriverMessage(m)">
+                                    <div class="msg-sender">@m.DriverName@(m.OrderId.HasValue ? $" · замовлення №{m.OrderId}" : "")</div>
+                                    <div class="msg-preview">@m.Subject</div>
+                                    <div class="msg-meta">
+                                        <span class="msg-cat admin">Адміну</span>
+                                        <span>@m.CreatedAt.ToLocalTime().ToString("dd.MM HH:mm")</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
 
+                        @if (openedDriverMessage != null)
+                        {
+                            <div class="msg-detail mt-3">
+                                <div class="msg-detail-header">
+                                    <div>
+                                        <div style="font-weight:700;color:var(--text-primary);font-size:1rem">@openedDriverMessage.Subject</div>
+                                        <div style="font-size:.8rem;color:var(--text-secondary)">
+                                            Від: <strong>@openedDriverMessage.DriverName</strong>@(openedDriverMessage.OrderId.HasValue ? $" · замовлення №{openedDriverMessage.OrderId}" : "") · @openedDriverMessage.CreatedAt.ToLocalTime().ToString("dd.MM HH:mm")
+                                        </div>
+                                    </div>
+                                    <button class="btn-modern btn-danger-modern" @onclick="() => openedDriverMessage = null"><i class="bi bi-x-lg"></i></button>
+                                </div>
+                                <div class="msg-detail-body">@openedDriverMessage.Body</div>
+
+@if (adminReplies.TryGetValue(openedDriverMessage.Id, out var sentReplies))
+{
+    @foreach (var r in sentReplies)
+    {
+        <div class="mt-2 p-2" style="background:rgba(59,130,246,.1);border-radius:6px;font-size:.85rem">
+            <strong>Ви</strong> · @r.At.ToLocalTime().ToString("dd.MM HH:mm")<br />@r.Text
+        </div>
+    }
+}
+
+@if (showDriverReplyBox)
+{
+    <textarea class="dark-input w-100 mt-3" rows="3" placeholder="Ваша відповідь водієві..." @bind="driverReplyText" @bind:event="oninput"></textarea>
+    <div class="d-flex gap-2 mt-2">
+        <button class="btn-action assign" @onclick="SendDriverReply" disabled="@string.IsNullOrWhiteSpace(driverReplyText)"><i class="bi bi-send"></i> Надіслати</button>
+        <button class="btn-action" @onclick="() => showDriverReplyBox = false">Скасувати</button>
+    </div>
+}
+else
+{
+    <div class="d-flex gap-2 mt-3">
+                                        <button class="btn-action assign" @onclick="OpenDriverReplyBox"><i class="bi bi-reply"></i> Відповісти</button>
+    </div>
+}
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
             <!-- ЗАГРОЗИ -->
             <div class="emergency-panel">
                 <div class="emergency-header">
@@ -87,6 +160,8 @@
                     <button class="emergency-btn btn-air" style="@EmStyle("Повітряна тривога")" @onclick='() => SetEmergency("Повітряна тривога")'><i class="bi bi-airplane-fill"></i> Повітряна тривога</button>
                     <button class="emergency-btn btn-ice" style="@EmStyle("Ожеледиця")" @onclick='() => SetEmergency("Ожеледиця")'><i class="bi bi-snow2"></i> Ожеледиця</button>
                     <button class="emergency-btn btn-bridge" style="@EmStyle("Перекриття мостів")" @onclick='() => SetEmergency("Перекриття мостів")'><i class="bi bi-sign-stop-fill"></i> Закриття мостів</button>
+                    <button class="emergency-btn btn-air" style="@EmStyle("Ураган")" @onclick='() => SetEmergency("Ураган")'><i class="bi bi-tornado"></i> Ураган</button>
+                    <button class="emergency-btn btn-ice" style="@EmStyle("Снігопад")" @onclick='() => SetEmergency("Снігопад")'><i class="bi bi-cloud-snow-fill"></i> Снігопад</button>
                 </div>
             </div>
 
@@ -671,8 +746,53 @@
         FleetService.OnChange += OnStateChanged;
         ExpertRulesService.OnChange += OnStateChanged;
         EmployeeService.OnChange += OnStateChanged;
+        ReportService.OnChange += OnStateChanged;
+        LoadDriverMessages();
     }
-    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+    private List<TransportIn.Services.DriverReportItem> driverMessages = new();
+    private TransportIn.Services.DriverReportItem? openedDriverMessage;
+    private Dictionary<int, List<(string Text, DateTime At)>> adminReplies = new();
+    private bool showDriverReplyBox;
+    private string driverReplyText = "";
+
+    private void OpenDriverReplyBox() { showDriverReplyBox = true; driverReplyText = ""; }
+
+    private void SendDriverReply()
+    {
+        if (openedDriverMessage == null || string.IsNullOrWhiteSpace(driverReplyText)) return;
+
+        // Відповідь зберігається як сповіщення водієві; список перечитається через ReportService.OnChange
+        if (ReportService.Reply(openedDriverMessage.Id, driverReplyText))
+        {
+            showDriverReplyBox = false;
+            driverReplyText = "";
+        }
+    }
+
+    private void LoadDriverMessages()
+    {
+        var openedId = openedDriverMessage?.Id;
+        driverMessages = ReportService.GetReports("admin");
+        adminReplies = ReportService.GetReplies();
+        openedDriverMessage = openedId.HasValue ? driverMessages.FirstOrDefault(m => m.Id == openedId) : null;
+    }
+
+    private void OpenDriverMessage(TransportIn.Services.DriverReportItem m)
+    {
+        openedDriverMessage = m;
+
+        if (!m.IsRead)
+        {
+            m.IsRead = true;
+            ReportService.MarkRead(m.Id); // викличе OnChange і оновить список
+        }
+    }
+
+    private void OnStateChanged() => InvokeAsync(() =>
+    {
+        LoadDriverMessages();
+        StateHasChanged();
+    });
 
     // ===== НАВІГАЦІЯ =====
     private bool IsActive(string path) => Navigation.Uri.EndsWith(path, StringComparison.OrdinalIgnoreCase);
@@ -1127,10 +1247,10 @@
     private void Logout() { AuthService.Logout(); Navigation.NavigateTo("/"); }
 
     private string GetInitials(string? n) { if (string.IsNullOrWhiteSpace(n)) return "?"; var p = n.Split(' ', StringSplitOptions.RemoveEmptyEntries); return p.Length >= 2 ? $"{p[0][0]}{p[1][0]}".ToUpper() : n[..Math.Min(2, n.Length)].ToUpper(); }
-    private string GetEmergencyLevel() => EmergencyService.CurrentEmergency switch { "Спокійно" => "0", "Ожеледиця" => "1", "Перекриття мостів" => "2", "Повітряна тривога" => "3", _ => "—" };
-    private string GetEmergencyClass() => EmergencyService.CurrentEmergency switch { "Спокійно" => "status-calm", "Ожеледиця" or "Перекриття мостів" => "status-warning", "Повітряна тривога" => "status-danger", _ => "status-calm" };
-    private string GetEmergencyIcon() => EmergencyService.CurrentEmergency switch { "Спокійно" => "bi-check-circle-fill", "Ожеледиця" => "bi-snow2", "Перекриття мостів" => "bi-sign-stop-fill", "Повітряна тривога" => "bi-exclamation-triangle-fill", _ => "bi-question-circle" };
-    private string GetEmergencyIconColor() => EmergencyService.CurrentEmergency switch { "Спокійно" => "green", "Ожеледиця" or "Перекриття мостів" => "amber", "Повітряна тривога" => "red", _ => "blue" };
+    private string GetEmergencyLevel() => EmergencyService.CurrentEmergency switch { "Спокійно" => "0", "Ожеледиця" or "Снігопад" => "1", "Перекриття мостів" => "2", "Повітряна тривога" or "Ураган" => "3", _ => "—" };
+    private string GetEmergencyClass() => EmergencyService.CurrentEmergency switch { "Спокійно" => "status-calm", "Ожеледиця" or "Перекриття мостів" or "Снігопад" => "status-warning", "Повітряна тривога" or "Ураган" => "status-danger", _ => "status-calm" };
+    private string GetEmergencyIcon() => EmergencyService.CurrentEmergency switch { "Спокійно" => "bi-check-circle-fill", "Ожеледиця" => "bi-snow2", "Снігопад" => "bi-cloud-snow-fill", "Ураган" => "bi-tornado", "Перекриття мостів" => "bi-sign-stop-fill", "Повітряна тривога" => "bi-exclamation-triangle-fill", _ => "bi-question-circle" };
+    private string GetEmergencyIconColor() => EmergencyService.CurrentEmergency switch { "Спокійно" => "green", "Ожеледиця" or "Перекриття мостів" or "Снігопад" => "amber", "Повітряна тривога" or "Ураган" => "red", _ => "blue" };
 
     public void Dispose()
     {
@@ -1138,5 +1258,6 @@
         FleetService.OnChange -= OnStateChanged;
         ExpertRulesService.OnChange -= OnStateChanged;
         EmployeeService.OnChange -= OnStateChanged;
+        ReportService.OnChange -= OnStateChanged;
     }
 }

@@ -2,6 +2,7 @@
 @layout TransportIn.Components.Layout.AdminLayout
 @inject TransportIn.Services.AuthService AuthService
 @inject TransportIn.Services.OrderService OrderService
+@inject TransportIn.Services.DriverReportService ReportService
 @inject TransportIn.Services.FleetService FleetService
 @inject TransportIn.Services.EmployeeService EmployeeService
 @implements IDisposable
@@ -387,24 +388,8 @@
                             else
                             {
                                 <div class="row g-3">
-                                    <div class="col-md-6">
-                                        <div class="form-section-title"><i class="bi bi-shield-exclamation"></i> Для адміністратора</div>
-                                        <div class="inbox-list" style="max-height:300px">
-                                            @foreach (var m in messages.Where(x => x.Category == "admin"))
-                                            {
-                                                <div class="msg-row @(m.IsRead ? "" : "unread")" @onclick="() => OpenMessage(m)">
-                                                    <div class="msg-sender">@m.SenderName</div>
-                                                    <div class="msg-preview">@m.Subject</div>
-                                                    <div class="msg-meta">
-                                                        <span class="msg-cat admin">Адміну</span>
-                                                        <span>@m.Time</span>
-                                                    </div>
-                                                </div>
-                                            }
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div class="form-section-title"><i class="bi bi-person-badge"></i> Для менеджера</div>
+                                    <div class="col-12">
+                                        <div class="form-section-title"><i class="bi bi-person-badge"></i> Клієнт / вантаж</div>
                                         <div class="inbox-list" style="max-height:300px">
                                             @foreach (var m in messages.Where(x => x.Category == "manager"))
                                             {
@@ -586,17 +571,14 @@
 
         LoadOrders();
 
-        messages = new()
-        {
-            new() { Id = 1, SenderName = "Коваленко І. П.", Subject = "ДТП на Оболонському проспекті", Body = "Стався дрібний ДТП, рух ускладнено.", Category = "admin", Time = "14:32", IsRead = false },
-            new() { Id = 2, SenderName = "Бондар В. М.", Subject = "Клієнт не виходить на зв'язок", Body = "На пункті доставки №2 вже 40 хв, телефон отримувача недоступний.", Category = "manager", Time = "15:10", IsRead = false },
-            new() { Id = 3, SenderName = "Шевченко О. О.", Subject = "Технічна несправність", Body = "Загорівся індикатор тиску масла.", Category = "admin", Time = "11:45", IsRead = true },
-        };
+                ReportService.OnChange += OnChanged;
+        LoadMessages();
     }
 
     private void OnChanged() => InvokeAsync(() =>
     {
         LoadOrders();
+        LoadMessages();
         StateHasChanged();
     });
 
@@ -904,15 +886,43 @@
     }
 
     // ===== Повідомлення =====
-    private void OpenMessage(MessageVM m) { openedMessage = m; m.IsRead = true; replyingTo = null; replyText = ""; }
+    // Менеджер бачить лише повідомлення типу «Клієнт / вантаж»; «ДТП / дорога» адресовані адміну
+    private void LoadMessages()
+    {
+        var openedId = openedMessage?.Id;
+        var savedReplies = ReportService.GetReplies();
+
+        messages = ReportService.GetReports("manager").Select(r => new MessageVM
+        {
+            Id = r.Id,
+            SenderName = r.OrderId.HasValue ? $"{r.DriverName} · замовлення №{r.OrderId}" : r.DriverName,
+            Subject = r.Subject,
+            Body = r.Body,
+            Category = "manager",
+            Time = r.CreatedAt.ToLocalTime().ToString("dd.MM HH:mm"),
+            IsRead = r.IsRead,
+            Replies = savedReplies.TryGetValue(r.Id, out var rep)
+                ? rep.Select(x => new ReplyVM { Text = x.Text, Time = x.At.ToLocalTime().ToString("dd.MM HH:mm") }).ToList()
+                : new()
+        }).ToList();
+
+        openedMessage = openedId.HasValue ? messages.FirstOrDefault(m => m.Id == openedId) : null;
+    }
+
+    private void OpenMessage(MessageVM m) { openedMessage = m; if (!m.IsRead) MarkRead(m); replyingTo = null; replyText = ""; }
     private void CloseMessage() { openedMessage = null; replyingTo = null; replyText = ""; }
-    private void MarkRead(MessageVM m) => m.IsRead = true;
+    private void MarkRead(MessageVM m) { m.IsRead = true; ReportService.MarkRead(m.Id); }
     private void ReplyMessage(MessageVM m) { replyingTo = m; replyText = ""; }
     private void SendReply()
     {
         if (replyingTo == null || string.IsNullOrWhiteSpace(replyText)) return;
-        replyingTo.Replies.Add(new ReplyVM { Text = replyText.Trim(), Time = DateTime.Now.ToString("HH:mm") });
-        replyingTo = null; replyText = "";
+
+        // Зберігаємо відповідь у БД; список перечитається через ReportService.OnChange
+        if (ReportService.Reply(replyingTo.Id, replyText))
+        {
+            replyingTo = null;
+            replyText = "";
+        }
     }
 
     private string MgrErr(string k) => mgrErrors.ContainsKey(k) ? "is-invalid" : "";
@@ -946,5 +956,6 @@
         OrderService.OnChange -= OnChanged;
         FleetService.OnChange -= OnChanged;
         EmployeeService.OnChange -= OnChanged;
+        ReportService.OnChange -= OnChanged;
     }
 }

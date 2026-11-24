@@ -20,7 +20,15 @@
     public static class PointWorkflow
     {
         public const string StatusNew = "Нова";
-
+        // Режими, за яких підтвердження виїзду заборонене (ТЗ: тривога, мости, ураган, снігопад)
+        public static bool IsDepartureBlocked(string? emergency) => emergency switch
+        {
+            "Повітряна тривога" => true,
+            "Перекриття мостів" => true,
+            "Ураган" => true,
+            "Снігопад" => true,
+            _ => false
+        };
         // Послідовність кроків для одного пункту.
         // Крок «Виїхав» є лише тоді, коли після цього пункту є наступний.
         public static List<PointStage> GetStages(bool isLoading, bool hasNextPoint)

@@ -13,6 +13,8 @@ let selectedId = null;
 let vehicleLayer = null;
 let routeLayer = null;
 let zoneLayer = null;
+let pointLayer = null;
+const geoCache = {};
 
 const markers = {};   // id -> { marker, status, visible }
 const routeLines = {}; // id -> polyline
@@ -78,6 +80,7 @@ export async function init(el, dotNetRef) {
 
     zoneLayer = L.layerGroup().addTo(map);
     routeLayer = L.layerGroup().addTo(map);
+    pointLayer = L.layerGroup().addTo(map);
     vehicleLayer = L.layerGroup().addTo(map);
 
     map.on('click', (e) => {
@@ -178,9 +181,11 @@ export function setZones(list) {
 
 export function setLayerVisible(name, visible) {
     if (!map) return;
-    const layer = name === 'routes' ? routeLayer : name === 'zones' ? zoneLayer : null;
-    if (!layer) return;
-    if (visible) map.addLayer(layer); else map.removeLayer(layer);
+    const layers = name === 'routes' ? [routeLayer, pointLayer] : name === 'zones' ? [zoneLayer] : [];
+    for (const layer of layers) {
+        if (!layer) continue;
+        if (visible) map.addLayer(layer); else map.removeLayer(layer);
+    }
 }
 
 export function setDrawing(on) {
@@ -203,4 +208,49 @@ export function dispose() {
     map = null; dotNet = null; selectedId = null;
     for (const k of Object.keys(markers)) delete markers[k];
     for (const k of Object.keys(routeLines)) delete routeLines[k];
+}
+// Геокодування адреси в межах Києва (Nominatim). Повертає [lat, lng] або null
+export async function geocode(address) {
+    const q = /київ/i.test(address) ? address : `${address}, Київ`;
+    if (q in geoCache) return geoCache[q];
+    try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 8000);
+        const r = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=uk&viewbox=30.2,50.6,30.85,50.2&bounded=1&q=${encodeURIComponent(q)}`,
+            { signal: ctrl.signal });
+        clearTimeout(t);
+        if (!r.ok) return null;
+        const j = await r.json();
+        const res = j && j.length ? [parseFloat(j[0].lat), parseFloat(j[0].lon)] : null;
+        geoCache[q] = res;
+        return res;
+    } catch {
+        return null;
+    }
+}
+
+function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Маркери пунктів завантаження (📦) і розвантаження (🏁) активних замовлень
+export function setPointMarkers(list) {
+    if (!map || !pointLayer) return;
+    pointLayer.clearLayers();
+    const done = ['Завантажено', 'Розвантажено', 'Виїхав'];
+    for (const p of list) {
+        const color = p.status === 'Нова' ? '#64748b' : done.includes(p.status) ? '#10b981' : '#f59e0b';
+        const icon = L.divIcon({
+            className: '',
+            iconSize: [26, 26],
+            iconAnchor: [13, 13],
+            html: `<div style="width:26px;height:26px;border-radius:6px;background:${color};border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-size:13px;box-shadow:0 2px 6px rgba(0,0,0,.5)">${p.isLoading ? '📦' : '🏁'}</div>`
+        });
+        L.marker([p.lat, p.lng], { icon, zIndexOffset: -100 })
+            .bindTooltip(
+                `№${p.orderId} · пункт ${p.seq}: ${p.isLoading ? 'завантаження' : 'розвантаження'}<br>${esc(p.address)}<br>Статус: ${esc(p.status)}`,
+                { direction: 'top', offset: [0, -12] })
+            .addTo(pointLayer);
+    }
 }

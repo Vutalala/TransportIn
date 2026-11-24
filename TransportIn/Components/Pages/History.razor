@@ -1,12 +1,15 @@
 ﻿@page "/history"
 @layout TransportIn.Components.Layout.AdminLayout
 @rendermode InteractiveServer
+@implements IDisposable
 @inject TransportIn.Services.AuthService AuthService
 @inject TransportIn.Services.EmergencyService EmergencyService
 @inject TransportIn.Services.OrderService OrderService
 @inject TransportIn.Services.FleetService FleetService
 @inject TransportIn.Services.ExpertRulesService ExpertRulesService
 @inject TransportIn.Services.EmployeeService EmployeeService
+@inject TransportIn.Services.HistoryService HistoryService
+@inject TransportIn.Services.DriverReportService ReportService
 @inject NavigationManager Navigation
 
 <div class="admin-layout">
@@ -134,7 +137,7 @@
                                     <tbody>
                                         @foreach (var o in filteredOrders)
                                         {
-                                            <tr class="history-table-row">
+                                            <tr class="history-table-row" style="cursor:pointer" @onclick="() => ToggleOrder(o.Id)">
                                                 <td><span class="history-id">#@o.Id</span></td>
                                                 <td><span class="history-date">@o.Date</span></td>
                                                 <td>
@@ -143,17 +146,48 @@
                                                 </td>
                                                 <td>@o.CargoName<br><span style="font-size:.78rem;color:var(--text-secondary)">@o.WeightTons т · @o.VolumeM3 м³</span></td>
                                                 <td style="font-size:.82rem">
-                                                    <i class="bi bi-geo-alt-fill" style="color:var(--primary-blue)"></i> @o.LoadingPoint<br>
-                                                    <i class="bi bi-flag-fill" style="color:var(--success-green)"></i> @o.DeliveryPoint
+                                                    @foreach (var p in o.Points)
+                                                    {
+                                                        <div>
+                                                            <i class="bi @(p.IsLoading ? "bi-geo-alt-fill" : "bi-flag-fill")" style="color:@(p.IsLoading ? "var(--primary-blue)" : "var(--success-green)")"></i> @p.Address
+                                                            @if (p.Status != "Нова")
+                                                            {
+                                                                <span class="status-badge in-progress" style="font-size:.68rem;padding:.1rem .4rem;margin-left:.3rem">@p.Status</span>
+                                                            }
+                                                        </div>
+                                                    }
                                                 </td>
                                                 <td>
                                                     <span class="history-driver">
-                                                        <i class="bi bi-person-badge"></i> @(string.IsNullOrEmpty(o.Driver) ? "—" : o.Driver)
+                                                        <i class="bi bi-person-badge"></i> @(o.Drivers.Count == 0 ? "—" : string.Join(", ", o.Drivers))
                                                     </span>
                                                 </td>
-                                                <td><span class="code-text">@o.VehiclePlate</span></td>
+                                                <td><span class="code-text">@(o.Plates.Count == 0 ? "—" : string.Join(", ", o.Plates))</span></td>
                                                 <td><span class="status-badge @OrderStatusClass(o.Status)">@o.Status</span></td>
                                             </tr>
+                                            @if (expandedOrderId == o.Id)
+                                            {
+                                                <tr>
+                                                    <td colspan="8">
+                                                        @if (o.Steps.Count == 0)
+                                                        {
+                                                            <div style="color:var(--text-secondary);font-size:.85rem">Для цього замовлення історії змін ще немає</div>
+                                                        }
+                                                        else
+                                                        {
+                                                            <div class="event-timeline">
+                                                                @foreach (var s in o.Steps)
+                                                                {
+                                                                    <div class="event-item status">
+                                                                        <div class="event-time">@s.Time</div>
+                                                                        <div class="event-desc">@s.Text</div>
+                                                                    </div>
+                                                                }
+                                                            </div>
+                                                        }
+                                                    </td>
+                                                </tr>
+                                            }
                                         }
                                     </tbody>
                                 </table>
@@ -268,14 +302,21 @@
 
 @code {
     private string activeTab = "orders";
+    private int? expandedOrderId;
+
+    private const string TimeFormat = "dd.MM.yyyy HH:mm";
 
     // ===== МОДЕЛІ =====
+    private class PointVM { public bool IsLoading; public string Address = ""; public string Status = ""; }
+    private class StepVM { public string Time = ""; public string Text = ""; }
     private class OrderHistoryVM
     {
-        public int Id; public string Date = ""; public string CustomerCompany = ""; public string CustomerName = "";
+        public int Id; public DateTime? DateValue; public string Date = "—";
+        public string CustomerCompany = ""; public string CustomerName = "";
         public string CargoName = ""; public double WeightTons; public double VolumeM3;
-        public string LoadingPoint = ""; public string DeliveryPoint = "";
-        public string Driver = ""; public string VehiclePlate = ""; public string Status = "";
+        public List<string> Drivers = new(); public List<string> Plates = new();
+        public string Status = "";
+        public List<PointVM> Points = new(); public List<StepVM> Steps = new();
     }
     private class EventVM
     {
@@ -295,55 +336,73 @@
     private OrderFilter orderFilter = new();
     private EventFilter eventFilter = new();
 
-    // ===== ЗАГУШКИ ДАНИХ =====
+    // ===== ДАНІ З БД =====
     private List<OrderHistoryVM> allOrders = new();
     private List<EventVM> allEvents = new();
     private List<RuleHistoryVM> allRules = new();
-    private List<string> allDrivers = new() { "Коваленко І. П.", "Бондар В. М.", "Шевченко О. О.", "Мельник Д. С." };
+    private List<string> allDrivers = new();
 
     protected override void OnInitialized()
     {
-        // ===== 1. ПЕРЕВІРКА РОЛІ =====
         if (AuthService.CurrentUser?.Role == TransportIn.Models.UserRole.Driver)
         {
             Navigation.NavigateTo("/driver-dashboard");
             return;
         }
 
-        // Заглушка історії замовлень
-        allOrders = new()
-        {
-            new() { Id = 1042, Date = "15.11.2026 09:15", CustomerCompany = "ТОВ «ФудМаркет»", CustomerName = "Петренко О. В.", CargoName = "Продукти охолоджені", WeightTons = 2.5, VolumeM3 = 12, LoadingPoint = "вул. Промислова, 15", DeliveryPoint = "вул. Хрещатик, 22", Driver = "Коваленко І. П.", VehiclePlate = "AA 1234 BP", Status = "В роботі" },
-            new() { Id = 1041, Date = "14.11.2026 14:30", CustomerCompany = "ПАТ «БудМатеріали»", CustomerName = "Сидоренко І. М.", CargoName = "Цегла керамічна", WeightTons = 18, VolumeM3 = 24, LoadingPoint = "вул. Заводська, 8", DeliveryPoint = "просп. Перемоги, 100", Driver = "Бондар В. М.", VehiclePlate = "AI 5678 CE", Status = "Завершено" },
-            new() { Id = 1040, Date = "14.11.2026 08:00", CustomerCompany = "ТОВ «ФармЛайн»", CustomerName = "Ковальчук Т. П.", CargoName = "Медикаменти", WeightTons = 1.2, VolumeM3 = 8, LoadingPoint = "вул. Медична, 3", DeliveryPoint = "вул. Аптечна, 12", Driver = "Шевченко О. О.", VehiclePlate = "BC 0912 AK", Status = "Завершено" },
-            new() { Id = 1039, Date = "13.11.2026 16:45", CustomerCompany = "ФОП Мельник", CustomerName = "Мельник Д. С.", CargoName = "Меблі", WeightTons = 4.5, VolumeM3 = 32, LoadingPoint = "вул. Меблева, 22", DeliveryPoint = "вул. Нова, 5", Driver = "Коваленко І. П.", VehiclePlate = "AA 1234 BP", Status = "Скасовано" },
-            new() { Id = 1038, Date = "12.11.2026 11:20", CustomerCompany = "ТОВ «АгроТрейд»", CustomerName = "Литвин О. І.", CargoName = "Зерно", WeightTons = 20, VolumeM3 = 45, LoadingPoint = "с. Зернове, склад 1", DeliveryPoint = "вул. Портова, 7", Driver = "Бондар В. М.", VehiclePlate = "AI 5678 CE", Status = "Завершено" },
-            new() { Id = 1037, Date = "11.11.2026 09:00", CustomerCompany = "ТОВ «ЕкоПродукт»", CustomerName = "Грищенко Н. В.", CargoName = "Овочі (рефрижератор)", WeightTons = 3.8, VolumeM3 = 18, LoadingPoint = "с. Городнє", DeliveryPoint = "вул. Ринкова, 1", Driver = "Шевченко О. О.", VehiclePlate = "BC 0912 AK", Status = "Призупинено" },
-        };
-
-        // Заглушка журналу подій
-        allEvents = new()
-        {
-            new() { Time = "15.11.2026 14:32", Type = "threat", TypeLabel = "ЗАГРОЗА", Title = "Активовано повітряну тривогу", Description = "Адміністратор активував тестову повітряну тривогу. 3 ТЗ в дорозі отримали попередження." },
-            new() { Time = "15.11.2026 14:35", Type = "rule", TypeLabel = "ПРАВИЛО", Title = "Спрацювало правило «Повітряна тривога — ТЗ в дорозі»", Description = "Система автоматично побудувала маршрут до найближчої безпечної стоянки для ТЗ AA 1234 BP." },
-            new() { Time = "15.11.2026 15:10", Type = "msg", TypeLabel = "ПОВІДОМЛЕННЯ", Title = "Повідомлення від Бондар В. М.", Description = "Клієнт не виходить на зв'язок на пункті доставки №2. Менеджеру надіслано запит." },
-            new() { Time = "15.11.2026 11:45", Type = "status", TypeLabel = "СТАТУС", Title = "Замовлення №1041 завершено", Description = "Водій Бондар В. М. підтвердив доставку вантажу «Цегла керамічна»." },
-            new() { Time = "14.11.2026 16:20", Type = "threat", TypeLabel = "ЗАГРОЗА", Title = "Перекриття мосту Патона", Description = "Адміністратор позначив міст Патона як недоступний. 2 маршрути перераховано." },
-            new() { Time = "14.11.2026 16:22", Type = "rule", TypeLabel = "ПРАВИЛО", Title = "Спрацювало правило «Перекриття мосту»", Description = "Автоматично побудовано альтернативний маршрут через міст Північний для ТЗ BC 0912 AK." },
-            new() { Time = "14.11.2026 09:15", Type = "status", TypeLabel = "СТАТУС", Title = "Призначено водія Коваленко І. П. на замовлення №1042", Description = "Менеджер призначив водія та ТЗ AA 1234 BP." },
-            new() { Time = "13.11.2026 17:00", Type = "status", TypeLabel = "СТАТУС", Title = "Замовлення №1039 скасовано", Description = "Менеджер скасував замовлення за запитом клієнта." },
-            new() { Time = "13.11.2026 11:30", Type = "msg", TypeLabel = "ПОВІДОМЛЕННЯ", Title = "Повідомлення від Шевченко О. О.", Description = "Технічна несправність: загорівся індикатор тиску масла. Адміністратору надіслано запит." },
-        };
-
-        // Заглушка застосування правил
-        allRules = new()
-        {
-            new() { Time = "15.11.2026 14:35", Threat = "Повітряна тривога", RuleName = "Повітряна тривога — ТЗ в дорозі", Recommendation = "Рух до найближчої безпечної стоянки", Target = "AA 1234 BP (Коваленко І. П.)", Result = "Виконано" },
-            new() { Time = "14.11.2026 16:22", Threat = "Перекриття мосту", RuleName = "Перекриття мосту — альтернативний маршрут", Recommendation = "Побудова маршруту через інший міст", Target = "BC 0912 AK (Шевченко О. О.)", Result = "Виконано" },
-            new() { Time = "12.11.2026 08:15", Threat = "Ожеледиця", RuleName = "Ожеледиця — зменшення швидкості", Recommendation = "Зменшити швидкість на 30-50%, збільшити час доставки", Target = "AI 5678 CE (Бондар В. М.)", Result = "Виконано" },
-            new() { Time = "11.11.2026 10:00", Threat = "Повітряна тривога", RuleName = "Повітряна тривога — ТЗ на пункті", Recommendation = "Блокування виїзду до завершення тривоги", Target = "AB 4455 MN (Мельник Д. С.)", Result = "Виконано" },
-        };
+        OrderService.OnChange += OnDataChanged;
+        ReportService.OnChange += OnDataChanged;
+        LoadHistory();
     }
+
+    private void LoadHistory()
+    {
+        allOrders = HistoryService.GetOrders().Select(o => new OrderHistoryVM
+        {
+            Id = o.Id,
+            DateValue = o.At?.ToLocalTime(),
+            Date = o.At.HasValue ? o.At.Value.ToLocalTime().ToString(TimeFormat) : "—",
+            CustomerCompany = o.CustomerCompany,
+            CustomerName = o.CustomerName,
+            CargoName = o.CargoName,
+            WeightTons = o.WeightTons,
+            VolumeM3 = o.VolumeM3,
+            Drivers = o.Drivers,
+            Plates = o.Plates,
+            Status = o.Status,
+            Points = o.Points.Select(p => new PointVM { IsLoading = p.IsLoading, Address = p.Address, Status = p.Status }).ToList(),
+            Steps = o.Steps.Select(s => new StepVM { Time = s.At.ToLocalTime().ToString(TimeFormat), Text = s.Text }).ToList()
+        }).ToList();
+
+        allDrivers = allOrders.SelectMany(o => o.Drivers).Distinct().OrderBy(d => d).ToList();
+
+        allEvents = HistoryService.GetEvents().Select(e => new EventVM
+        {
+            Time = e.At.ToLocalTime().ToString(TimeFormat),
+            Type = e.Type,
+            TypeLabel = e.TypeLabel,
+            Title = e.Title,
+            Description = e.Description
+        }).ToList();
+
+        allRules = HistoryService.GetRules().Select(r => new RuleHistoryVM
+        {
+            Time = r.At.ToLocalTime().ToString(TimeFormat),
+            Threat = r.Threat,
+            RuleName = r.RuleName,
+            Recommendation = r.Recommendation,
+            Target = r.Target,
+            Result = r.Result
+        }).ToList();
+    }
+
+    private void OnDataChanged() => InvokeAsync(() =>
+    {
+        LoadHistory();
+        StateHasChanged();
+    });
+
+    private void ToggleOrder(int id) => expandedOrderId = expandedOrderId == id ? null : id;
 
     // ===== ФІЛЬТРАЦІЯ =====
     private List<OrderHistoryVM> filteredOrders
@@ -354,12 +413,18 @@
             if (!string.IsNullOrEmpty(orderFilter.Status))
                 list = list.Where(o => o.Status == orderFilter.Status);
             if (!string.IsNullOrEmpty(orderFilter.Driver))
-                list = list.Where(o => o.Driver == orderFilter.Driver);
+                list = list.Where(o => o.Drivers.Contains(orderFilter.Driver));
 
             if (!string.IsNullOrEmpty(orderFilter.DateFrom))
-                list = list.Where(o => ParseDate(o.Date) >= ParseDate(orderFilter.DateFrom));
+            {
+                var from = ParseDate(orderFilter.DateFrom);
+                list = list.Where(o => o.DateValue.HasValue && o.DateValue.Value >= from);
+            }
             if (!string.IsNullOrEmpty(orderFilter.DateTo))
-                list = list.Where(o => ParseDate(o.Date) <= ParseDate(orderFilter.DateTo) + TimeSpan.FromDays(1));
+            {
+                var to = ParseDate(orderFilter.DateTo) + TimeSpan.FromDays(1);
+                list = list.Where(o => o.DateValue.HasValue && o.DateValue.Value <= to);
+            }
 
             return list.ToList();
         }
@@ -385,8 +450,8 @@
 
     private DateTime ParseDate(string s)
     {
-        if (DateTime.TryParse(s, out var d)) return d;
-        if (DateTime.TryParseExact(s, "dd.MM.yyyy", null, System.Globalization.DateTimeStyles.None, out d)) return d;
+        if (DateTime.TryParseExact(s, "dd.MM.yyyy", null, System.Globalization.DateTimeStyles.None, out var d)) return d;
+        if (DateTime.TryParse(s, out d)) return d;
         return DateTime.MinValue;
     }
 
@@ -405,4 +470,10 @@
     private string GetInitials(string? n) { if (string.IsNullOrWhiteSpace(n)) return "?"; var p = n.Split(' ', StringSplitOptions.RemoveEmptyEntries); return p.Length >= 2 ? $"{p[0][0]}{p[1][0]}".ToUpper() : n[..Math.Min(2, n.Length)].ToUpper(); }
 
     private bool IsActive(string path) => Navigation.Uri.EndsWith(path, StringComparison.OrdinalIgnoreCase);
+
+    public void Dispose()
+    {
+        OrderService.OnChange -= OnDataChanged;
+        ReportService.OnChange -= OnDataChanged;
+    }
 }

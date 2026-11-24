@@ -48,10 +48,12 @@ namespace TransportIn.Services
     public partial class OrderService
     {
         private readonly IDbContextFactory<AppDbContext> _contextFactory;
+        private readonly EmergencyService _emergency;
 
-        public OrderService(IDbContextFactory<AppDbContext> contextFactory)
+        public OrderService(IDbContextFactory<AppDbContext> contextFactory, EmergencyService emergency)
         {
             _contextFactory = contextFactory;
+            _emergency = emergency;
         }
 
         public event Action? OnChange;
@@ -272,6 +274,9 @@ namespace TransportIn.Services
 
                 SaveCargos(db, order.Id, draft.Cargos);
                 SavePoints(db, order.Id, draft.Points);
+
+                AddHistory(db, order.Id, "", order.Status, "Замовлення створено");
+                db.SaveChanges();
 
                 transaction.Commit();
 
@@ -504,6 +509,10 @@ namespace TransportIn.Services
 
             var next = PointWorkflow.GetNextStageIndex(stages, point.Status);
             if (next >= stages.Count || stages[next].Status != newStatus)
+                return false;
+
+            // Підтвердження виїзду блокується на сервері під час тривоги, перекриття мостів, урагану, снігопаду
+            if (stages[next].IsDeparture && PointWorkflow.IsDepartureBlocked(_emergency.CurrentEmergency))
                 return false;
 
             var previous = point.Status;
